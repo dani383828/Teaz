@@ -265,7 +265,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if state and (state.startswith("awaiting_deposit_receipt_") or state.startswith("awaiting_subscription_receipt_")):
             payment_id = int(state.split("_")[-1])
             payment = cursor.execute("SELECT amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
-            amount, ptype = payment if payment else (0, "")
+            if not payment:
+                await update.message.reply_text("⚠️ پرداخت یافت نشد. لطفا دوباره تلاش کنید.")
+                return
+            amount, ptype = payment
             caption = f"💳 فیش پرداختی از کاربر {user_id}:\n"
             caption += f"مبلغ: {amount}\nنوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}"
 
@@ -279,18 +282,37 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 if update.message.photo:
                     file_id = update.message.photo[-1].file_id
-                    await application.bot.send_photo(chat_id=ADMIN_ID, photo=file_id, caption=caption, reply_markup=keyboard)
-                else:
-                    doc_id = update.message.document.file_id
-                    await application.bot.send_document(chat_id=ADMIN_ID, document=doc_id, caption=caption, reply_markup=keyboard)
+                    # دریافت فایل برای اطمینان از دسترسی
+                    file = await application.bot.get_file(file_id)
+                    await application.bot.send_photo(
+                        chat_id=ADMIN_ID,
+                        photo=file_id,
+                        caption=caption,
+                        reply_markup=keyboard,
+                        parse_mode="Markdown"
+                    )
+                elif update.message.document:
+                    file_id = update.message.document.file_id
+                    # دریافت فایل برای اطمینان از دسترسی
+                    file = await application.bot.get_file(file_id)
+                    await application.bot.send_document(
+                        chat_id=ADMIN_ID,
+                        document=file_id,
+                        caption=caption,
+                        reply_markup=keyboard,
+                        parse_mode="Markdown"
+                    )
+                await update.message.reply_text(
+                    "✅ فیش شما با موفقیت برای ادمین ارسال شد، لطفا منتظر تایید باشید.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
             except Exception as e:
                 logging.error(f"Error sending payment receipt to admin: {e}")
                 logging.error(traceback.format_exc())
-                await update.message.reply_text("⚠️ مشکلی در ارسال فیش به ادمین پیش آمد. لطفا بعدا تلاش کنید.")
-                return
-
-            await update.message.reply_text("✅ فیش شما با موفقیت برای ادمین ارسال شد، لطفا منتظر تایید باشید.", reply_markup=get_main_keyboard())
-            user_states.pop(user_id, None)
+                await update.message.reply_text(
+                    "⚠️ مشکلی در ارسال فیش به ادمین پیش آمد. لطفا دوباره تلاش کنید یا با پشتیبانی تماس بگیرید."
+                )
             return
 
     await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
