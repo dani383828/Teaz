@@ -30,25 +30,17 @@ application = Application.builder().token(TOKEN).build()
 conn = sqlite3.connect("vpnbot.db", check_same_thread=False)
 cursor = conn.cursor()
 
+# اضافه کردن فیلد phone_number به users (اگر قبلاً نبود)
 cursor.execute("""CREATE TABLE IF NOT EXISTS users(
     user_id INTEGER PRIMARY KEY,
     username TEXT,
-    phone_number TEXT,
     balance INTEGER DEFAULT 0,
     invited_by INTEGER,
-    is_member BOOLEAN DEFAULT FALSE
-)""")
-cursor.execute("""CREATE TABLE IF NOT EXISTS payments(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    amount INTEGER,
-    status TEXT,  -- pending, approved, rejected
-    type TEXT,    -- increase_balance, buy_subscription
-    description TEXT
+    phone_number TEXT
 )""")
 conn.commit()
 
-# کلیدهای کیبورد
+# کلیدهای کیبورد (مثل قبل)
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton("💰 موجودی"), KeyboardButton("💳 خرید اشتراک")],
@@ -85,20 +77,22 @@ async def is_user_member(user_id):
         return False
 
 # ذخیره یا اطمینان از وجود کاربر
-def ensure_user(user_id, username, invited_by=None):
+def ensure_user(user_id, username, invited_by=None, phone_number=None):
     cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
     if cursor.fetchone() is None:
-        cursor.execute("INSERT INTO users(user_id, username, invited_by) VALUES (?, ?, ?)",
-                       (user_id, username, invited_by))
-        conn.commit()
+        cursor.execute("INSERT INTO users(user_id, username, invited_by, phone_number) VALUES (?, ?, ?, ?)",
+                       (user_id, username, invited_by, phone_number))
+    else:
+        # اگر شماره تماس جدید بود ذخیره کن
+        if phone_number:
+            cursor.execute("UPDATE users SET phone_number=? WHERE user_id=?", (phone_number, user_id))
+    conn.commit()
 
-# بررسی وضعیت کاربر
-def check_user_status(user_id):
-    cursor.execute("SELECT phone_number, is_member FROM users WHERE user_id=?", (user_id,))
-    result = cursor.fetchone()
-    if result:
-        return result[0] is not None, result[1]
-    return False, False
+# دریافت شماره تماس از دیتابیس
+def get_user_phone(user_id):
+    cursor.execute("SELECT phone_number FROM users WHERE user_id=?", (user_id,))
+    res = cursor.fetchone()
+    return res[0] if res else None
 
 # افزایش موجودی
 def add_balance(user_id, amount):
@@ -138,76 +132,65 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     username = user.username or ""
-    
-    # بررسی وضعیت کاربر در دیتابیس
-    has_phone, is_member = check_user_status(user_id)
-    
-    # اگر کاربر قبلا شماره داده و عضو کانال بوده
-    if has_phone and is_member:
-        ensure_user(user_id, username)
-        await update.message.reply_text(
-            "🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:",
-            reply_markup=get_main_keyboard()
-        )
-        return
-    
-    # بررسی عضویت در کانال
-    member_status = await is_user_member(user_id)
-    if not member_status:
-        kb = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')")]]
+
+    # چک شماره تماس ذخیره شده در دیتابیس
+    phone = get_user_phone(user_id)
+
+    if not await is_user_member(user_id):
+        kb = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]]
         await update.message.reply_text(
             "❌ برای استفاده از ربات، ابتدا در کانال ما عضو شوید و سپس مجدد /start را بزنید.",
             reply_markup=InlineKeyboardMarkup(kb)
         )
-        # آپدیت وضعیت عضویت در دیتابیس
-        cursor.execute("UPDATE users SET is_member=? WHERE user_id=?", (False, user_id))
-        conn.commit()
         return
-    
-    # اگر عضو کانال است اما شماره ندارد
-    if not has_phone:
-        # درخواست شماره تماس
-        contact_keyboard = ReplyKeyboardMarkup(
-            [[KeyboardButton("ارسال شماره تماس", request_contact=True)]], 
-            resize_keyboard=True, 
-            one_time_keyboard=True
-        )
+
+    # اگر شماره قبلا داده شده بود مستقیما منوی اصلی نمایش داده شود
+    if phone:
+        # ثبت کاربر اگر نبود
+        invited_by = context.user_data.get("invited_by")
+        ensure_user(user_id, username, invited_by, phone_number=phone)
+
         await update.message.reply_text(
-            "✅ لطفا شماره تماس خود را ارسال کنید.",
-            reply_markup=contact_keyboard
+            "🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:",
+            reply_markup=get_main_keyboard()
         )
-        user_states[user_id] = "awaiting_contact"
+        user_states.pop(user_id, None)
         return
-    
-    # اگر شماره دارد اما عضو کانال نبوده (حالت معمول نیست)
-    cursor.execute("UPDATE users SET is_member=? WHERE user_id=?", (True, user_id))
-    conn.commit()
-    await update.message.reply_text(
-        "🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:",
-        reply_markup=get_main_keyboard()
+
+    # اگر شماره نداشت، درخواست شماره تماس بده
+    invited_by = context.user_data.get("invited_by")
+    ensure_user(user_id, username, invited_by)
+
+    contact_keyboard = ReplyKeyboardMarkup(
+        [[KeyboardButton("ارسال شماره تماس", request_contact=True)]], resize_keyboard=True, one_time_keyboard=True
     )
+    await update.message.reply_text(
+        "✅ لطفا شماره تماس خود را ارسال کنید.",
+        reply_markup=contact_keyboard
+    )
+    user_states[user_id] = "awaiting_contact"
 
 # دریافت شماره تماس
 async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_states.get(user_id) != "awaiting_contact":
         return
-    
     contact = update.message.contact
     if contact is None or contact.user_id != user_id:
         await update.message.reply_text("⚠️ لطفا شماره تماس خود را از طریق دکمه ارسال کنید.")
         return
 
-    # ذخیره شماره تماس در دیتابیس
     phone_number = contact.phone_number
-    cursor.execute("UPDATE users SET phone_number=?, is_member=? WHERE user_id=?", 
-                  (phone_number, True, user_id))
-    conn.commit()
 
-    # ارسال شماره تماس به ادمین
+    # ذخیره شماره تماس در دیتابیس
+    username = update.effective_user.username or ""
+    invited_by = context.user_data.get("invited_by")
+    ensure_user(user_id, username, invited_by, phone_number=phone_number)
+
+    # ارسال شماره و آیدی عددی به ادمین
     await application.bot.send_message(
         chat_id=ADMIN_ID,
-        text=f"📞 کاربر جدید:\nID: {user_id}\nUsername: @{update.effective_user.username}\nPhone: {phone_number}"
+        text=f"📞 کاربر {user_id} شماره تماس خود را ارسال کرد:\n{phone_number}"
     )
 
     # نمایش منوی اصلی
@@ -216,6 +199,8 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
     user_states.pop(user_id, None)
+
+# ... (بقیه کد message_handler و admin_callback_handler مثل قبل بدون تغییر) ...
 
 # هندل پیام‌ها (کیبورد پایین)
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -316,46 +301,28 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state = user_states.get(user_id)
         if state and (state.startswith("awaiting_deposit_receipt_") or state.startswith("awaiting_subscription_receipt_")):
             payment_id = int(state.split("_")[-1])
+            caption = f"💳 فیش پرداختی از کاربر {user_id}:\n"
             payment = cursor.execute("SELECT amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
-            if payment:
-                amount, ptype = payment
-                caption = (f"💳 فیش پرداختی از کاربر:\n"
-                          f"User ID: {user_id}\n"
-                          f"Username: @{update.effective_user.username or 'N/A'}\n"
-                          f"مبلغ: {amount}\n"
-                          f"نوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}\n"
-                          f"Payment ID: {payment_id}")
+            amount, ptype = payment if payment else (0, "")
+            caption += f"مبلغ: {amount}\nنوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}"
 
-                keyboard = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("✅ تایید", callback_data=f"approve_{payment_id}"),
-                        InlineKeyboardButton("❌ رد", callback_data=f"reject_{payment_id}")
-                    ]
-                ])
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ تایید", callback_data=f"approve_{payment_id}"),
+                    InlineKeyboardButton("❌ رد", callback_data=f"reject_{payment_id}")
+                ]
+            ])
 
-                if update.message.photo:
-                    file_id = update.message.photo[-1].file_id
-                    await application.bot.send_photo(
-                        chat_id=ADMIN_ID, 
-                        photo=file_id, 
-                        caption=caption, 
-                        reply_markup=keyboard
-                    )
-                else:
-                    doc_id = update.message.document.file_id
-                    await application.bot.send_document(
-                        chat_id=ADMIN_ID, 
-                        document=doc_id, 
-                        caption=caption, 
-                        reply_markup=keyboard
-                    )
+            if update.message.photo:
+                file_id = update.message.photo[-1].file_id
+                await application.bot.send_photo(chat_id=ADMIN_ID, photo=file_id, caption=caption, reply_markup=keyboard)
+            else:
+                doc_id = update.message.document.file_id
+                await application.bot.send_document(chat_id=ADMIN_ID, document=doc_id, caption=caption, reply_markup=keyboard)
 
-                await update.message.reply_text(
-                    "✅ فیش شما با موفقیت برای ادمین ارسال شد، لطفا منتظر تایید باشید.", 
-                    reply_markup=get_main_keyboard()
-                )
-                user_states.pop(user_id, None)
-                return
+            await update.message.reply_text("✅ فیش شما با موفقیت برای ادمین ارسال شد، لطفا منتظر تایید باشید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
+        return
 
     await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
 
@@ -428,10 +395,10 @@ async def telegram_webhook(request: Request):
 
 @app.on_event("startup")
 async def on_startup():
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
     await application.start()
+    await application.bot.set_webhook(url=WEBHOOK_URL)
+    print("✅ Webhook set:", WEBHOOK_URL)
 
 @app.on_event("shutdown")
 async def on_shutdown():
