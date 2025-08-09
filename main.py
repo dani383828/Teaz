@@ -194,8 +194,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
-    # ====== بررسی فیش پرداخت ======
-    if update.message.photo or update.message.document:
+    # ====== بررسی فیش پرداخت یا کانفیگ ارسالی توسط ادمین ======
+    if update.message.photo or update.message.document or update.message.text:
         state = user_states.get(user_id)
         if state and (state.startswith("awaiting_deposit_receipt_") or state.startswith("awaiting_subscription_receipt_")):
             try:
@@ -226,6 +226,28 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     await update.message.reply_text("✅ فیش شما برای ادمین ارسال شد، لطفا منتظر تایید باشید.", reply_markup=get_main_keyboard())
                     user_states.pop(user_id, None)
+                    return
+        # مدیریت ارسال کانفیگ توسط ادمین
+        elif state and state.startswith("awaiting_config_"):
+            try:
+                payment_id = int(state.split("_")[-1])
+            except:
+                payment_id = None
+
+            if payment_id:
+                payment = cursor.execute("SELECT user_id, description FROM payments WHERE id=?", (payment_id,)).fetchone()
+                if payment:
+                    buyer_id, description = payment
+                    if update.message.text:
+                        config = update.message.text
+                        await context.bot.send_message(
+                            chat_id=buyer_id,
+                            text=f"✅ کانفیگ اشتراک شما ({description}) دریافت شد:\n{config}"
+                        )
+                        await update.message.reply_text("✅ کانفیگ با موفقیت به خریدار ارسال شد.", reply_markup=None)
+                        user_states.pop(user_id, None)
+                    else:
+                        await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.")
                     return
 
     # بقیه بخش‌ها
@@ -309,33 +331,54 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
     await query.answer()
 
-    if data.startswith("approve_") or data.startswith("reject_"):
+    if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
         if update.effective_user.id != ADMIN_ID:
             await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
             return
 
-        payment_id = int(data.split("_")[1])
-        payment = cursor.execute("SELECT user_id, amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
-        if not payment:
-            await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-            return
-        user_id, amount, ptype = payment
-
         if data.startswith("approve_"):
+            payment_id = int(data.split("_")[1])
+            payment = cursor.execute("SELECT user_id, amount, type, description FROM payments WHERE id=?", (payment_id,)).fetchone()
+            if not payment:
+                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+                return
+            user_id, amount, ptype, description = payment
+
             update_payment_status(payment_id, "approved")
             if ptype == "increase_balance":
                 add_balance(user_id, amount)
                 await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
+                await query.message.edit_reply_markup(None)
+                await query.message.reply_text("✅ پرداخت تایید شد.")
             elif ptype == "buy_subscription":
                 await context.bot.send_message(user_id, "✅ پرداخت تایید شد. اشتراک شما ارسال خواهد شد.")
-            await query.message.edit_reply_markup(None)
-            await query.message.reply_text("✅ پرداخت تایید شد.")
+                config_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
+                ])
+                await query.message.edit_reply_markup(None)
+                await query.message.reply_text(f"✅ پرداخت برای اشتراک ({description}) تایید شد.", reply_markup=config_keyboard)
 
         elif data.startswith("reject_"):
+            payment_id = int(data.split("_")[1])
+            payment = cursor.execute("SELECT user_id, amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
+            if not payment:
+                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+                return
+            user_id, amount, ptype = payment
+
             update_payment_status(payment_id, "rejected")
             await context.bot.send_message(user_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
             await query.message.edit_reply_markup(None)
             await query.message.reply_text("❌ پرداخت رد شد.")
+
+        elif data.startswith("send_config_"):
+            payment_id = int(data.split("_")[-1])
+            payment = cursor.execute("SELECT user_id, description FROM payments WHERE id=?", (payment_id,)).fetchone()
+            if not payment:
+                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+                return
+            await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
+            user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
 
 # استارت با پارامتر
 async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
