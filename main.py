@@ -395,10 +395,10 @@ async def telegram_webhook(request: Request):
 
 @app.on_event("startup")
 async def on_startup():
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
     await application.start()
+    await application.bot.set_webhook(url=WEBHOOK_URL)
+    print("✅ Webhook set:", WEBHOOK_URL)
 
 @app.on_event("shutdown")
 async def on_shutdown():
