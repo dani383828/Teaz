@@ -13,7 +13,7 @@ ADMIN_ID = 5542927340
 TRON_ADDRESS = "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb"
 
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = f"https://sea-2ri6.onrender.com{WEBHOOK_PATH}"
+WEBHOOK_URL = f"https://teaz.onrender.com{WEBHOOK_PATH}"
 
 # ⚙️ لاگ‌گیری
 logging.basicConfig(
