@@ -171,9 +171,59 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:", reply_markup=get_main_keyboard())
     user_states.pop(user_id, None)
 
+async def handle_payment_receipt(update: Update, payment_id: int):
+    payment = cursor.execute("SELECT user_id, amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
+    if not payment:
+        await update.message.reply_text("⚠️ پرداخت یافت نشد. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+        return
+
+    user_id, amount, ptype = payment
+    caption = f"💳 فیش پرداختی از کاربر {user_id}:\n"
+    caption += f"مبلغ: {amount}\nنوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}\n"
+    caption += f"Payment ID: {payment_id}"
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ تایید", callback_data=f"approve_{payment_id}"),
+            InlineKeyboardButton("❌ رد", callback_data=f"reject_{payment_id}")
+        ]
+    ])
+
+    try:
+        if update.message.photo:
+            file_id = update.message.photo[-1].file_id
+            await application.bot.send_photo(
+                chat_id=ADMIN_ID,
+                photo=file_id,
+                caption=caption,
+                reply_markup=keyboard
+            )
+        elif update.message.document:
+            doc_id = update.message.document.file_id
+            await application.bot.send_document(
+                chat_id=ADMIN_ID,
+                document=doc_id,
+                caption=caption,
+                reply_markup=keyboard
+            )
+        
+        await update.message.reply_text(
+            "✅ فیش شما با موفقیت برای ادمین ارسال شد، لطفا منتظر تایید باشید.",
+            reply_markup=get_main_keyboard()
+        )
+        return True
+    except Exception as e:
+        logging.error(f"Error sending payment receipt to admin: {e}")
+        logging.error(traceback.format_exc())
+        await update.message.reply_text(
+            "⚠️ مشکلی در ارسال فیش به ادمین پیش آمد. لطفا بعدا تلاش کنید.",
+            reply_markup=get_main_keyboard()
+        )
+        return False
+
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text = update.message.text
+    text = update.message.text if update.message.text else ""
 
     logging.info(f"Received message from {user_id}: text={text}, has_photo={bool(update.message.photo)}, has_document={bool(update.message.document)}")
     logging.info(f"user_states[{user_id}] = {user_states.get(user_id)}")
@@ -264,48 +314,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state = user_states.get(user_id)
         if state and (state.startswith("awaiting_deposit_receipt_") or state.startswith("awaiting_subscription_receipt_")):
             payment_id = int(state.split("_")[-1])
-            payment = cursor.execute("SELECT amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
-            amount, ptype = payment if payment else (0, "")
-            caption = f"💳 فیش پرداختی از کاربر {user_id}:\n"
-            caption += f"مبلغ: {amount}\nنوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}"
-
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ تایید", callback_data=f"approve_{payment_id}"),
-                    InlineKeyboardButton("❌ رد", callback_data=f"reject_{payment_id}")
-                ]
-            ])
-
-            try:
-                if update.message.photo:
-                    file_id = update.message.photo[-1].file_id
-                    await application.bot.send_photo(
-                        chat_id=ADMIN_ID, 
-                        photo=file_id, 
-                        caption=caption, 
-                        reply_markup=keyboard
-                    )
-                elif update.message.document:
-                    doc_id = update.message.document.file_id
-                    await application.bot.send_document(
-                        chat_id=ADMIN_ID, 
-                        document=doc_id, 
-                        caption=caption, 
-                        reply_markup=keyboard
-                    )
-                
-                await update.message.reply_text(
-                    "✅ فیش شما با موفقیت برای ادمین ارسال شد، لطفا منتظر تایید باشید.", 
-                    reply_markup=get_main_keyboard()
-                )
-                user_states.pop(user_id, None)
-            except Exception as e:
-                logging.error(f"Error sending payment receipt to admin: {e}")
-                logging.error(traceback.format_exc())
-                await update.message.reply_text(
-                    "⚠️ مشکلی در ارسال فیش به ادمین پیش آمد. لطفا بعدا تلاش کنید.",
-                    reply_markup=get_main_keyboard()
-                )
+            await handle_payment_receipt(update, payment_id)
+            user_states.pop(user_id, None)
             return
 
     await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
@@ -364,7 +374,7 @@ async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 application.add_handler(CommandHandler("start", start_with_param))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
-application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
+application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.DOCUMENT, message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
 
 @app.post(WEBHOOK_PATH)
