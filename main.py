@@ -3,16 +3,18 @@ import sqlite3
 import traceback
 from fastapi import FastAPI, Request
 from telegram import (
-    Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+    Update, ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton
 )
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+    Application, CommandHandler, ContextTypes,
+    MessageHandler, filters, CallbackQueryHandler
 )
 
-# اطلاعات ربات
+# ======== تنظیمات ربات ========
 TOKEN = "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
 CHANNEL_USERNAME = "@teazvpn"
-ADMIN_ID = 5542927340
+ADMIN_ID = 5542927340  # حتما عدد صحیح و ادمین ربات را استارت زده باشد
 TRON_ADDRESS = "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb"
 BANK_CARD = "0000 - 0000 - 0000 - 0000"
 
@@ -24,30 +26,36 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+# ======== ایجاد برنامه ========
 app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
-# دیتابیس sqlite ساده
+# ======== اتصال به دیتابیس SQLite ========
 conn = sqlite3.connect("vpnbot.db", check_same_thread=False)
 cursor = conn.cursor()
 
-cursor.execute("""CREATE TABLE IF NOT EXISTS users(
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users(
     user_id INTEGER PRIMARY KEY,
     username TEXT,
     balance INTEGER DEFAULT 0,
     invited_by INTEGER,
     phone TEXT DEFAULT NULL
-)""")
-cursor.execute("""CREATE TABLE IF NOT EXISTS payments(
+)
+""")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS payments(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     amount INTEGER,
-    status TEXT,
-    type TEXT,
+    status TEXT,  -- pending, approved, rejected
+    type TEXT,    -- increase_balance, buy_subscription
     description TEXT
-)""")
+)
+""")
 conn.commit()
 
+# ======== کیبوردها ========
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton("💰 موجودی"), KeyboardButton("💳 خرید اشتراک")],
@@ -75,13 +83,7 @@ def get_subscription_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-async def is_user_member(user_id):
-    try:
-        member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
-        return False
-
+# ======== توابع دیتابیس ========
 def ensure_user(user_id, username, invited_by=None):
     cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
     if cursor.fetchone() is None:
@@ -118,8 +120,23 @@ def update_payment_status(payment_id, status):
     cursor.execute("UPDATE payments SET status=? WHERE id=?", (status, payment_id))
     conn.commit()
 
+def get_pending_payments():
+    cursor.execute("SELECT id, user_id, amount, type, description FROM payments WHERE status='pending'")
+    return cursor.fetchall()
+
+# ======== بررسی عضویت کاربر در کانال ========
+async def is_user_member(user_id):
+    try:
+        member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except Exception as e:
+        logging.error(f"Error checking membership: {e}")
+        return False
+
+# ======== وضعیت کاربر ========
 user_states = {}
 
+# ======== هندلرها ========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
@@ -146,15 +163,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     contact_keyboard = ReplyKeyboardMarkup(
-        [[KeyboardButton("ارسال شماره تماس", request_contact=True)]], resize_keyboard=True, one_time_keyboard=True
+        [[KeyboardButton("ارسال شماره تماس", request_contact=True)]],
+        resize_keyboard=True, one_time_keyboard=True
     )
-    await update.message.reply_text("✅ لطفا شماره تماس خود را ارسال کنید.", reply_markup=contact_keyboard)
+    await update.message.reply_text(
+        "✅ لطفا شماره تماس خود را ارسال کنید.",
+        reply_markup=contact_keyboard
+    )
     user_states[user_id] = "awaiting_contact"
 
 async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_states.get(user_id) != "awaiting_contact":
         return
+
     contact = update.message.contact
     if contact is None or contact.user_id != user_id:
         await update.message.reply_text("⚠️ لطفا شماره تماس خود را از طریق دکمه ارسال کنید.")
@@ -163,69 +185,23 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone_number = contact.phone_number
     save_user_phone(user_id, phone_number)
 
+    # ارسال اطلاع به ادمین
     await application.bot.send_message(
         chat_id=ADMIN_ID,
         text=f"📞 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) شماره تماس خود را ارسال کرد:\n{phone_number}"
     )
 
-    await update.message.reply_text("🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:", reply_markup=get_main_keyboard())
+    await update.message.reply_text(
+        "🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:",
+        reply_markup=get_main_keyboard()
+    )
     user_states.pop(user_id, None)
-
-async def handle_payment_receipt(update: Update, payment_id: int):
-    payment = cursor.execute("SELECT user_id, amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
-    if not payment:
-        await update.message.reply_text("⚠️ پرداخت یافت نشد. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-        return
-
-    user_id, amount, ptype = payment
-    caption = f"💳 فیش پرداختی از کاربر {user_id}:\n"
-    caption += f"مبلغ: {amount}\nنوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}\n"
-    caption += f"Payment ID: {payment_id}"
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ تایید", callback_data=f"approve_{payment_id}"),
-            InlineKeyboardButton("❌ رد", callback_data=f"reject_{payment_id}")
-        ]
-    ])
-
-    try:
-        if update.message.photo:
-            file_id = update.message.photo[-1].file_id
-            await application.bot.send_photo(
-                chat_id=ADMIN_ID,
-                photo=file_id,
-                caption=caption,
-                reply_markup=keyboard
-            )
-        elif update.message.document:
-            doc_id = update.message.document.file_id
-            await application.bot.send_document(
-                chat_id=ADMIN_ID,
-                document=doc_id,
-                caption=caption,
-                reply_markup=keyboard
-            )
-        
-        await update.message.reply_text(
-            "✅ فیش شما با موفقیت برای ادمین ارسال شد، لطفا منتظر تایید باشید.",
-            reply_markup=get_main_keyboard()
-        )
-        return True
-    except Exception as e:
-        logging.error(f"Error sending payment receipt to admin: {e}")
-        logging.error(traceback.format_exc())
-        await update.message.reply_text(
-            "⚠️ مشکلی در ارسال فیش به ادمین پیش آمد. لطفا بعدا تلاش کنید.",
-            reply_markup=get_main_keyboard()
-        )
-        return False
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text = update.message.text if update.message.text else ""
+    text = update.message.text
 
-    logging.info(f"Received message from {user_id}: text={text}, has_photo={bool(update.message.photo)}, has_document={bool(update.message.document)}")
+    logging.info(f"Received message from {user_id}: {text}")
     logging.info(f"user_states[{user_id}] = {user_states.get(user_id)}")
 
     if text == "بازگشت به منو":
@@ -243,7 +219,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "افزایش موجودی":
-        await update.message.reply_text("💳 لطفا مبلغ واریزی خود را به تومان به صورت عدد وارد کنید (مثال: 50000):", reply_markup=get_back_keyboard())
+        await update.message.reply_text(
+            "💳 لطفا مبلغ واریزی خود را به تومان به صورت عدد وارد کنید (مثال: 50000):",
+            reply_markup=get_back_keyboard()
+        )
         user_states[user_id] = "awaiting_deposit_amount"
         return
 
@@ -314,10 +293,52 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state = user_states.get(user_id)
         if state and (state.startswith("awaiting_deposit_receipt_") or state.startswith("awaiting_subscription_receipt_")):
             payment_id = int(state.split("_")[-1])
-            await handle_payment_receipt(update, payment_id)
-            user_states.pop(user_id, None)
+            payment = cursor.execute("SELECT amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
+            amount, ptype = payment if payment else (0, "")
+            caption = f"💳 فیش پرداختی از کاربر {user_id}:\nمبلغ: {amount}\nنوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}"
+
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ تایید", callback_data=f"approve_{payment_id}"),
+                    InlineKeyboardButton("❌ رد", callback_data=f"reject_{payment_id}")
+                ]
+            ])
+
+            try:
+                # پیام تست به ادمین
+                await application.bot.send_message(chat_id=ADMIN_ID, text="🔔 یک فیش جدید ارسال شده، در حال دریافت...")
+
+                if update.message.photo:
+                    file_id = update.message.photo[-1].file_id
+                    await application.bot.send_photo(
+                        chat_id=ADMIN_ID,
+                        photo=file_id,
+                        caption=caption,
+                        reply_markup=keyboard
+                    )
+                elif update.message.document:
+                    doc_id = update.message.document.file_id
+                    await application.bot.send_document(
+                        chat_id=ADMIN_ID,
+                        document=doc_id,
+                        caption=caption,
+                        reply_markup=keyboard
+                    )
+                await update.message.reply_text(
+                    "✅ فیش شما با موفقیت برای ادمین ارسال شد، لطفا منتظر تایید باشید.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+            except Exception as e:
+                logging.error(f"Error sending payment receipt to admin: {e}")
+                logging.error(traceback.format_exc())
+                await update.message.reply_text(
+                    "⚠️ مشکلی در ارسال فیش به ادمین پیش آمد. لطفا بعدا تلاش کنید.",
+                    reply_markup=get_main_keyboard()
+                )
             return
 
+    # دستور نامعتبر
     await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
 
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -372,11 +393,13 @@ async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await start(update, context)
 
+# ======== اضافه کردن هندلرها ========
 application.add_handler(CommandHandler("start", start_with_param))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
-application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.DOCUMENT, message_handler))
+application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
 
+# ======== وبهوک ========
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -384,6 +407,7 @@ async def telegram_webhook(request: Request):
     await application.update_queue.put(update)
     return {"ok": True}
 
+# ======== استارت و شات‌داون ========
 @app.on_event("startup")
 async def on_startup():
     await application.initialize()
