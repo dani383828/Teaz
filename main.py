@@ -27,75 +27,72 @@ app = FastAPI()
 # 🎯 ساخت اپلیکیشن ربات
 application = Application.builder().token(TOKEN).build()
 
-# 📌 بررسی عضویت در کانال
-async def check_channel_membership(user_id: int, bot: Application.bot) -> bool:
+
+# 📌 بررسی عضویت کاربر
+async def is_user_member(user_id):
     try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "administrator", "creator"]
     except:
         return False
 
+
 # 📌 /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not await check_channel_membership(user_id, context.bot):
-        keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]]
+    if not await is_user_member(user_id):
+        join_btn = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]]
         await update.message.reply_text(
-            "🌐 لطفاً برای استفاده از ربات ابتدا در کانال ما عضو شوید:\n\n"
-            f"{CHANNEL_USERNAME}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "❌ برای استفاده از ربات، ابتدا در کانال ما عضو شوید و سپس مجدد /start را بزنید.",
+            reply_markup=InlineKeyboardMarkup(join_btn)
         )
         return
 
     keyboard = [
         [InlineKeyboardButton("💰 موجودی", callback_data="balance")],
         [InlineKeyboardButton("💳 خرید اشتراک", callback_data="buy_vpn")],
-        [InlineKeyboardButton("🧪 اشتراک تست رایگان (بزودی فعال می‌شود)", callback_data="free_test")],
+        [InlineKeyboardButton("🎁 اشتراک تست رایگان", callback_data="free_test")],
         [InlineKeyboardButton("📞 پشتیبانی", url="https://t.me/teazadmin")],
-        [InlineKeyboardButton("🎁 اعتبار رایگان", callback_data="free_credit")],
-        [InlineKeyboardButton("📋 اشتراک‌های من", callback_data="my_subscriptions")]
+        [InlineKeyboardButton("💵 اعتبار رایگان", callback_data="free_credit")],
+        [InlineKeyboardButton("📂 اشتراک‌های من", callback_data="my_subs")]
     ]
     await update.message.reply_text(
-        "🌐 خوش اومدی به فروشگاه VPN ما\n\n"
-        "لطفاً یکی از گزینه‌های زیر رو انتخاب کن 👇",
+        "🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
 
 # 📌 هندلر دکمه‌ها
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user_id = query.from_user.id
-    if not await check_channel_membership(user_id, context.bot):
-        keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]]
-        await query.message.reply_text(
-            "🌐 لطفاً برای استفاده از ربات ابتدا در کانال ما عضو شوید:\n\n"
-            f"{CHANNEL_USERNAME}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-
     if query.data == "buy_vpn":
         await query.message.reply_text(
-            f"💳 لطفاً مبلغ رو به آدرس ترون زیر ارسال کنید:\n\n"
+            f"💳 لطفاً مبلغ را به آدرس ترون زیر ارسال کنید:\n\n"
             f"`{TRON_ADDRESS}`\n\n"
-            "سپس رسید رو برای ادمین ارسال کنید.",
+            "سپس رسید را برای ادمین ارسال کنید.",
             parse_mode="Markdown"
         )
         await query.message.reply_text(f"📞 ارتباط با ادمین: [ادمین](tg://user?id={ADMIN_ID})", parse_mode="Markdown")
+
     elif query.data == "balance":
-        await query.message.reply_text("💰 موجودی شما: در حال حاضر این قابلیت فعال نیست.")
+        await query.message.reply_text("💰 موجودی شما: 0 تومان")
+
     elif query.data == "free_test":
-        await query.message.reply_text("🧪 اشتراک تست رایگان: بزودی فعال می‌شود!")
+        await query.message.reply_text("🎁 اشتراک تست رایگان بزودی فعال می‌شود.")
+
     elif query.data == "free_credit":
-        await query.message.reply_text("🎁 اعتبار رایگان: در حال حاضر این قابلیت فعال نیست.")
-    elif query.data == "my_subscriptions":
-        await query.message.reply_text("📋 اشتراک‌های من: در حال حاضر هیچ اشتراکی ثبت نشده است.")
+        await query.message.reply_text("💵 بزودی می‌توانید اعتبار رایگان دریافت کنید.")
+
+    elif query.data == "my_subs":
+        await query.message.reply_text("📂 شما هیچ اشتراکی ندارید.")
+
 
 # 🔗 ثبت هندلرها
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CallbackQueryHandler(button_handler))
+
 
 # 🔁 وب‌هوک تلگرام
 @app.post(WEBHOOK_PATH)
@@ -105,6 +102,7 @@ async def telegram_webhook(request: Request):
     await application.update_queue.put(update)
     return {"ok": True}
 
+
 # 🔥 زمان بالا آمدن سرور
 @app.on_event("startup")
 async def on_startup():
@@ -112,6 +110,7 @@ async def on_startup():
     print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
     await application.start()
+
 
 # 🛑 هنگام خاموشی
 @app.on_event("shutdown")
