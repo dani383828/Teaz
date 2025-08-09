@@ -26,6 +26,7 @@ logging.basicConfig(
 app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
+# دیتابیس sqlite ساده
 conn = sqlite3.connect("vpnbot.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -46,6 +47,10 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS payments(
 )""")
 conn.commit()
 
+# ===== متغیر ذخیره موقت =====
+config_waiting = {}  # {admin_id: user_id_to_send_config}
+
+# کلیدهای کیبورد
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton("💰 موجودی"), KeyboardButton("💳 خرید اشتراک")],
@@ -73,6 +78,7 @@ def get_subscription_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# بررسی عضویت
 async def is_user_member(user_id):
     try:
         member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
@@ -80,6 +86,7 @@ async def is_user_member(user_id):
     except:
         return False
 
+# ذخیره یا اطمینان از وجود کاربر
 def ensure_user(user_id, username, invited_by=None):
     cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
     if cursor.fetchone() is None:
@@ -87,24 +94,29 @@ def ensure_user(user_id, username, invited_by=None):
                        (user_id, username, invited_by))
         conn.commit()
 
+# ذخیره شماره تماس کاربر
 def save_user_phone(user_id, phone):
     cursor.execute("UPDATE users SET phone=? WHERE user_id=?", (phone, user_id))
     conn.commit()
 
+# دریافت شماره تماس کاربر
 def get_user_phone(user_id):
     cursor.execute("SELECT phone FROM users WHERE user_id=?", (user_id,))
     res = cursor.fetchone()
     return res[0] if res else None
 
+# افزایش موجودی
 def add_balance(user_id, amount):
     cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
     conn.commit()
 
+# دریافت موجودی
 def get_balance(user_id):
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
     res = cursor.fetchone()
     return res[0] if res else 0
 
+# ثبت پرداخت جدید
 def add_payment(user_id, amount, ptype, description=""):
     cursor.execute(
         "INSERT INTO payments(user_id, amount, status, type, description) VALUES (?, ?, 'pending', ?, ?)",
@@ -113,12 +125,15 @@ def add_payment(user_id, amount, ptype, description=""):
     conn.commit()
     return cursor.lastrowid
 
+# آپدیت وضعیت پرداخت
 def update_payment_status(payment_id, status):
     cursor.execute("UPDATE payments SET status=? WHERE id=?", (status, payment_id))
     conn.commit()
 
+# نگهداری وضعیت کاربر
 user_states = {}
 
+# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
@@ -153,6 +168,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     user_states[user_id] = "awaiting_contact"
 
+# دریافت شماره تماس
 async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_states.get(user_id) != "awaiting_contact":
@@ -176,10 +192,22 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     user_states.pop(user_id, None)
 
+# هندل پیام‌ها
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
+    # حالت ارسال کانفیگ توسط ادمین
+    if user_id == ADMIN_ID and user_id in config_waiting:
+        buyer_id = config_waiting.pop(user_id)
+        if update.message.document:
+            await context.bot.send_document(chat_id=buyer_id, document=update.message.document.file_id)
+        elif update.message.text:
+            await context.bot.send_message(chat_id=buyer_id, text=update.message.text)
+        await update.message.reply_text("✅ کانفیگ برای خریدار ارسال شد.")
+        return
+
+    # ====== بررسی فیش پرداخت ======
     if update.message.photo or update.message.document:
         state = user_states.get(user_id)
         if state and (state.startswith("awaiting_deposit_receipt_") or state.startswith("awaiting_subscription_receipt_")):
@@ -213,6 +241,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_states.pop(user_id, None)
                     return
 
+    # بقیه بخش‌ها
     if text == "بازگشت به منو":
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
@@ -264,137 +293,67 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
         return
 
-# اضافه کردن دیکشنری برای نگهداری حالت ارسال کانفیگ ادمین و اطلاعات کاربر مربوطه
-admin_config_states = {}  # key: admin_id, value: payment_id
-
+# تایید/رد توسط ادمین
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
-    user_id = update.effective_user.id
     await query.answer()
 
-    if data.startswith("approve_") or data.startswith("reject_") or data == "send_config":
-        if user_id != ADMIN_ID:
+    if data.startswith("approve_") or data.startswith("reject_"):
+        if update.effective_user.id != ADMIN_ID:
             await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
             return
 
-        if data.startswith("approve_"):
-            payment_id = int(data.split("_")[1])
-            payment = cursor.execute("SELECT user_id, amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            buyer_id, amount, ptype = payment
+        payment_id = int(data.split("_")[1])
+        payment = cursor.execute("SELECT user_id, amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
+        if not payment:
+            await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+            return
+        user_id, amount, ptype = payment
 
+        if data.startswith("approve_"):
             update_payment_status(payment_id, "approved")
             if ptype == "increase_balance":
-                add_balance(buyer_id, amount)
-                await context.bot.send_message(buyer_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
-            elif ptype == "buy_subscription":
-                await context.bot.send_message(buyer_id, "✅ پرداخت تایید شد. اشتراک شما ارسال خواهد شد.")
-
-            # ارسال پیام تایید به ادمین با دکمه ارسال کانفیگ فقط برای خرید اشتراک
-            if ptype == "buy_subscription":
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data="send_config")]])
-                await query.message.edit_reply_markup(kb)
-                await query.message.reply_text("✅ پرداخت تایید شد. لطفا برای ارسال کانفیگ روی دکمه زیر کلیک کنید.")
-            else:
+                add_balance(user_id, amount)
+                await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
                 await query.message.edit_reply_markup(None)
                 await query.message.reply_text("✅ پرداخت تایید شد.")
+            elif ptype == "buy_subscription":
+                await context.bot.send_message(user_id, "✅ پرداخت تایید شد. اشتراک شما ارسال خواهد شد.")
+                # دکمه ارسال کانفیگ فقط برای ادمین
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"sendconfig_{user_id}")]])
+                await query.message.edit_reply_markup(kb)
 
         elif data.startswith("reject_"):
-            payment_id = int(data.split("_")[1])
-            payment = cursor.execute("SELECT user_id FROM payments WHERE id=?", (payment_id,)).fetchone()
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            buyer_id = payment[0]
             update_payment_status(payment_id, "rejected")
-            await context.bot.send_message(buyer_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
+            await context.bot.send_message(user_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
             await query.message.edit_reply_markup(None)
             await query.message.reply_text("❌ پرداخت رد شد.")
 
-        elif data == "send_config":
-            # از ادمین بخواه که کانفیگ رو ارسال کنه
-            # باید payment_id آخرین خرید اشتراک تایید شده رو نگهداری کنیم
-            # ساده ترین راه: گرفتن آخرین پرداخت تایید شده برای ادمین (احتمالا بهتر در admin_config_states ذخیره کنیم)
-            # چون اینجا مشخص نیست payment_id چیه، باید از پیام قبلی استخراج کنیم یا از dict
+    elif data.startswith("sendconfig_"):
+        if update.effective_user.id != ADMIN_ID:
+            await query.message.reply_text("⚠️ فقط ادمین می‌تواند این کار را انجام دهد.")
+            return
+        buyer_id = int(data.split("_")[1])
+        config_waiting[ADMIN_ID] = buyer_id
+        await query.message.reply_text("📄 لطفا کانفیگ را ارسال کنید (متن یا فایل).")
 
-            # اینجا فرض می‌کنیم آخرین پیام حاوی دکمه است و payment_id رو استخراج کنیم:
-            # برای سادگی، می‌تونیم admin_config_states رو به payment_id مقدار بدیم
+# استارت با پارامتر
+async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if args and len(args) > 0:
+        try:
+            invited_by = int(args[0])
+        except:
+            invited_by = None
+        context.user_data["invited_by"] = invited_by
+    await start(update, context)
 
-            # این متد به کاربر ادمین اجازه میده کانفیگ رو ارسال کنه
-            # برای اینکه کد ساده باشه، بفرستیم پیام و حالت رو توی admin_config_states ذخیره کنیم
-
-            # اگر بخواهیم payment_id رو از متن پیام استخراج کنیم (مثلاً تو متن پیام هست)
-            # اما برای حالا فرض میکنیم payment_id آخرین تایید شده است
-
-            # استخراج payment_id از پیام ادمین:
-            # این یک فرض است که payment_id رو میشه از متن پیام قبلی گرفت. ولی امن تر اینه تو admin_config_states ذخیره کنیم.
-
-            # فقط میذاریم ادمین در حالت "awaiting_config" باشه، برای دریافت پیام کانفیگ
-
-            # برای دریافت payment_id دقیق، از پیام callback query میشه ندید، پس ساده ترین راه: از آخرین خرید تایید شده بگیریم:
-            cursor.execute("SELECT id FROM payments WHERE status='approved' AND type='buy_subscription' ORDER BY id DESC LIMIT 1")
-            res = cursor.fetchone()
-            if res:
-                payment_id = res[0]
-                admin_config_states[user_id] = payment_id
-                user_states[user_id] = "awaiting_config"
-                await context.bot.send_message(user_id, "لطفا کانفیگ را ارسال کنید.")
-                await query.message.delete_reply_markup()
-            else:
-                await context.bot.send_message(user_id, "⚠️ هیچ خرید اشتراکی برای ارسال کانفیگ یافت نشد.")
-
-async def config_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_states.get(user_id) != "awaiting_config":
-        return
-    if user_id != ADMIN_ID:
-        return
-
-    payment_id = admin_config_states.get(user_id)
-    if not payment_id:
-        await update.message.reply_text("⚠️ خطا در یافتن اطلاعات خرید.")
-        user_states.pop(user_id, None)
-        return
-
-    # گرفتن شناسه کاربر خریدار
-    payment = cursor.execute("SELECT user_id FROM payments WHERE id=?", (payment_id,)).fetchone()
-    if not payment:
-        await update.message.reply_text("⚠️ خطا در یافتن پرداخت.")
-        user_states.pop(user_id, None)
-        return
-    buyer_id = payment[0]
-
-    # ارسال کانفیگ به خریدار
-    if update.message.text:
-        text = update.message.text
-        await context.bot.send_message(buyer_id, f"📩 کانفیگ اشتراک شما:\n\n{text}")
-        await update.message.reply_text("✅ کانفیگ با موفقیت ارسال شد.")
-    elif update.message.document:
-        doc = update.message.document
-        file_id = doc.file_id
-        await context.bot.send_document(buyer_id, file_id, caption="📩 کانفیگ اشتراک شما")
-        await update.message.reply_text("✅ کانفیگ با موفقیت ارسال شد.")
-    elif update.message.photo:
-        photo = update.message.photo[-1]
-        file_id = photo.file_id
-        await context.bot.send_photo(buyer_id, file_id, caption="📩 کانفیگ اشتراک شما")
-        await update.message.reply_text("✅ کانفیگ با موفقیت ارسال شد.")
-    else:
-        await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن، عکس یا فایل ارسال کنید.")
-        return
-
-    # پاک کردن وضعیت
-    user_states.pop(user_id, None)
-    admin_config_states.pop(user_id, None)
-
-application.add_handler(CommandHandler("start", start))
+# ثبت هندلرها
+application.add_handler(CommandHandler("start", start_with_param))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
-application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), config_message_handler, block=False))
 
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
