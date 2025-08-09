@@ -129,7 +129,6 @@ def update_payment_status(payment_id, status):
 
 # نگهداری وضعیت کاربر
 user_states = {}
-config_send_states = {}  # وضعیت ارسال کانفیگ توسط ادمین {admin_id: user_id_target}
 
 # /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -195,13 +194,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
-    # اگر ادمین در حالت ارسال کانفیگ باشد
-    if user_id == ADMIN_ID and user_id in config_send_states:
-        target_user = config_send_states.pop(user_id)
-        await context.bot.send_message(chat_id=target_user, text=f"📡 کانفیگ شما:\n{text}")
-        await update.message.reply_text("✅ کانفیگ برای کاربر ارسال شد.")
-        return
-
     # ====== بررسی فیش پرداخت ======
     if update.message.photo or update.message.document:
         state = user_states.get(user_id)
@@ -236,7 +228,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_states.pop(user_id, None)
                     return
 
-    # ادامه منوها
+    # بقیه بخش‌ها
     if text == "بازگشت به منو":
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
@@ -311,29 +303,16 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             if ptype == "increase_balance":
                 add_balance(user_id, amount)
                 await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
-                await query.message.edit_reply_markup(None)
-                await query.message.reply_text("✅ پرداخت تایید شد.")
             elif ptype == "buy_subscription":
                 await context.bot.send_message(user_id, "✅ پرداخت تایید شد. اشتراک شما ارسال خواهد شد.")
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"sendconfig_{user_id}")]
-                ])
-                await query.message.edit_reply_markup(kb)
-                await query.message.reply_text("✅ پرداخت تایید شد.")
+            await query.message.edit_reply_markup(None)
+            await query.message.reply_text("✅ پرداخت تایید شد.")
 
         elif data.startswith("reject_"):
             update_payment_status(payment_id, "rejected")
             await context.bot.send_message(user_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
             await query.message.edit_reply_markup(None)
             await query.message.reply_text("❌ پرداخت رد شد.")
-
-    elif data.startswith("sendconfig_"):
-        if update.effective_user.id != ADMIN_ID:
-            await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
-            return
-        target_user = int(data.split("_")[1])
-        config_send_states[ADMIN_ID] = target_user
-        await query.message.reply_text("📄 لطفا کانفیگ را ارسال کنید:")
 
 # استارت با پارامتر
 async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
