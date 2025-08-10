@@ -98,12 +98,6 @@ def ensure_user(user_id, username, invited_by=None):
         cursor.execute("INSERT INTO users(user_id, username, invited_by) VALUES (?, ?, ?)",
                        (user_id, username, invited_by))
         conn.commit()
-        # اضافه کردن پاداش به دعوت‌کننده
-        if invited_by and invited_by != user_id:
-            cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
-            if cursor.fetchone():
-                add_balance(invited_by, 25000)  # پاداش 25,000 تومان به دعوت‌کننده
-                conn.commit()
 
 # ذخیره شماره تماس کاربر
 def save_user_phone(user_id, phone):
@@ -352,15 +346,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💵 اعتبار رایگان":
         invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
-        with open("invite_image.jpg", "rb") as photo:
-            await update.message.reply_photo(
-                photo=photo,
-                caption=(
-                    f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                    "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
-                ),
-                reply_markup=get_main_keyboard()
-            )
+        await update.message.reply_text(
+            f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+            "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+            reply_markup=get_main_keyboard()
+        )
         return
 
     if text == "📂 اشتراک‌های من":
@@ -441,10 +431,9 @@ async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args and len(args) > 0:
         try:
             invited_by = int(args[0])
-            if invited_by != update.effective_user.id:  # اطمینان از اینکه کاربر خودش نیست
-                context.user_data["invited_by"] = invited_by
         except:
-            context.user_data["invited_by"] = None
+            invited_by = None
+        context.user_data["invited_by"] = invited_by
     await start(update, context)
 
 # ثبت هندلرها
