@@ -8,6 +8,14 @@ from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 )
 from supabase import create_client, Client
+import httpx
+
+# کلاینت HTTP سفارشی برای رفع خطای proxy
+class CustomHTTPClient(httpx.Client):
+    def __init__(self, *args, **kwargs):
+        kwargs.pop("proxy", None)  # حذف پارامتر proxy
+        kwargs.pop("proxies", None)  # حذف پارامتر proxies
+        super().__init__(*args, **kwargs)
 
 # اطلاعات ربات
 TOKEN = "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
@@ -30,25 +38,66 @@ application = Application.builder().token(TOKEN).build()
 # اتصال به Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY,
+    options={"http_client": CustomHTTPClient()}
+)
 
 # ایجاد جداول در Supabase (در صورت عدم وجود)
 def init_database():
     try:
-        supabase.table("users").select("*").limit(1).execute()  # بررسی وجود جدول
-    except:
-        supabase.table("users").insert({}).execute()  # ایجاد جدول با یک ردیف خالی
-        supabase.table("users").delete().neq("user_id", 0).execute()  # حذف ردیف خالی
+        # چک کردن وجود جدول users
+        supabase.table("users").select("*").limit(1).execute()
+    except Exception as e:
+        if "Could not find the table" in str(e):
+            supabase.rpc("execute_sql", {
+                "query": """
+                CREATE TABLE public.users (
+                    user_id BIGINT PRIMARY KEY,
+                    username TEXT,
+                    balance BIGINT DEFAULT 0,
+                    invited_by BIGINT,
+                    phone TEXT
+                );
+                """
+            }).execute()
+
     try:
+        # چک کردن وجود جدول payments
         supabase.table("payments").select("*").limit(1).execute()
-    except:
-        supabase.table("payments").insert({}).execute()
-        supabase.table("payments").delete().neq("id", 0).execute()
+    except Exception as e:
+        if "Could not find the table" in str(e):
+            supabase.rpc("execute_sql", {
+                "query": """
+                CREATE TABLE public.payments (
+                    id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                    user_id BIGINT NOT NULL,
+                    amount BIGINT NOT NULL,
+                    status TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    description TEXT
+                );
+                """
+            }).execute()
+
     try:
+        # چک کردن وجود جدول subscriptions
         supabase.table("subscriptions").select("*").limit(1).execute()
-    except:
-        supabase.table("subscriptions").insert({}).execute()
-        supabase.table("subscriptions").delete().neq("id", 0).execute()
+    except Exception as e:
+        if "Could not find the table" in str(e):
+            supabase.rpc("execute_sql", {
+                "query": """
+                CREATE TABLE public.subscriptions (
+                    id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                    user_id BIGINT NOT NULL,
+                    payment_id BIGINT NOT NULL,
+                    plan TEXT NOT NULL,
+                    config TEXT,
+                    status TEXT DEFAULT 'active' NOT NULL
+                );
+                """
+            }).execute()
 
 init_database()
 
@@ -388,7 +437,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response, reply_markup=get_main_keyboard(), parse_mode="Markdown")
         return
 
-    await update.message.reply_text("⚠️ دستور نامعتfilms است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
+    await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
 
 # تایید/رد توسط ادمین
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
