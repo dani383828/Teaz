@@ -7,7 +7,6 @@ from telegram import (
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 )
-from photo_manager import get_invite_photo  # وارد کردن تابع مدیریت عکس
 
 # اطلاعات ربات
 TOKEN = "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
@@ -99,6 +98,12 @@ def ensure_user(user_id, username, invited_by=None):
         cursor.execute("INSERT INTO users(user_id, username, invited_by) VALUES (?, ?, ?)",
                        (user_id, username, invited_by))
         conn.commit()
+        # اضافه کردن پاداش به دعوت‌کننده
+        if invited_by and invited_by != user_id:
+            cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
+            if cursor.fetchone():
+                add_balance(invited_by, 25000)  # پاداش 25,000 تومان به دعوت‌کننده
+                conn.commit()
 
 # ذخیره شماره تماس کاربر
 def save_user_phone(user_id, phone):
@@ -151,8 +156,7 @@ def update_payment_status(payment_id, status):
 
 # دریافت اشتراک‌های کاربر
 def get_user_subscriptions(user_id):
-    pagination = 1
-    cursor.execute(f"SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id=? LIMIT {pagination}", (user_id,))
+    cursor.execute("SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id=?", (user_id,))
     return cursor.fetchall()
 
 # نگهداری وضعیت کاربر
@@ -226,12 +230,6 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
-
-    # گرفتن file_id برای ادمین
-    if update.message.photo and user_id == ADMIN_ID:
-        file_id = update.message.photo[-1].file_id
-        await update.message.reply_text(f"File ID: {file_id}")
-        return
 
     # ====== بررسی فیش پرداخت یا کانفیگ ارسالی توسط ادمین ======
     if update.message.photo or update.message.document or update.message.text:
@@ -353,26 +351,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "💵 اعتبار رایگان":
-        try:
-            invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
-            photo_file_id = get_invite_photo()  # دریافت file_id عکس از photo_manager
-            # چک کردن اینکه file_id معتبر باشه
-            if not photo_file_id or not isinstance(photo_file_id, str) or len(photo_file_id) < 10:
-                raise ValueError("Invalid file_id")
+        invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
+        with open("invite_image.jpg", "rb") as photo:
             await update.message.reply_photo(
-                photo=photo_file_id,
-                caption=f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                        "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.\n"
-                        "⚠️ توجه: استفاده از لینک خودتان برای دریافت پاداش ممکن نیست!",
-                reply_markup=get_main_keyboard()
-            )
-        except Exception as e:
-            logging.error(f"Error in sending invite photo: {e}")
-            await update.message.reply_text(
-                f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.\n"
-                "⚠️ توجه: استفاده از لینک خودتان برای دریافت پاداش ممکن نیست!\n"
-                "⚠️ مشکلی در ارسال عکس دعوت پیش آمد. لطفاً با پشتیبانی تماس بگیرید.",
+                photo=photo,
+                caption=(
+                    f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                    "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
+                ),
                 reply_markup=get_main_keyboard()
             )
         return
@@ -452,15 +438,13 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 # استارت با پارامتر
 async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
-    user_id = update.effective_user.id
     if args and len(args) > 0:
         try:
             invited_by = int(args[0])
-            # جلوگیری از دریافت پاداش برای کلیک روی لینک خود
-            if invited_by != user_id:
+            if invited_by != update.effective_user.id:  # اطمینان از اینکه کاربر خودش نیست
                 context.user_data["invited_by"] = invited_by
         except:
-            invited_by = None
+            context.user_data["invited_by"] = None
     await start(update, context)
 
 # ثبت هندلرها
