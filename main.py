@@ -10,12 +10,14 @@ from telegram.ext import (
 )
 
 # ---------- تنظیمات اولیه ----------
-TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jZNg"
+# اگر می‌خوای متغیرها از ENV خونده بشن، می‌تونی TOKEN رو هم از ENV بگیری.
+TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
 CHANNEL_USERNAME = "@teazvpn"
 ADMIN_ID = 5542927340
 TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
 BANK_CARD = "0000 - 0000 - 0000 - 0000"
 
+# Webhook URL — اگر URL رندرت فرق داره اون رو تو REPLACE کن یا از ENV استفاده کن
 RENDER_BASE_URL = os.getenv("RENDER_BASE_URL") or "https://teaz.onrender.com"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{RENDER_BASE_URL}{WEBHOOK_PATH}"
@@ -28,10 +30,11 @@ logging.basicConfig(
 app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
+# ---------- PostgreSQL connection pool (psycopg2) ----------
 import psycopg2
 from psycopg2 import pool
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")  # 반드시 در Render ست کن
 
 db_pool: pool.ThreadedConnectionPool = None
 
@@ -73,6 +76,7 @@ def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=Fa
 async def db_execute(query, params=(), fetch=False, fetchone=False, returning=False):
     return await asyncio.to_thread(_db_execute_sync, query, params, fetch, fetchone, returning)
 
+# ---------- ساخت جداول ----------
 CREATE_USERS_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY,
@@ -108,6 +112,7 @@ async def create_tables():
     await db_execute(CREATE_PAYMENTS_SQL)
     await db_execute(CREATE_SUBSCRIPTIONS_SQL)
 
+# ---------- کیبوردها ----------
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton("💰 موجودی"), KeyboardButton("💳 خرید اشتراک")],
@@ -135,6 +140,7 @@ def get_subscription_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# ---------- توابع DB ----------
 async def is_user_member(user_id):
     try:
         member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
@@ -189,8 +195,10 @@ async def get_user_subscriptions(user_id):
     rows = await db_execute("SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id = %s", (user_id,), fetch=True)
     return rows
 
+# ---------- وضعیت کاربر در مموری ----------
 user_states = {}
 
+# ---------- هندلرها ----------
 async def set_bot_commands():
     commands = [BotCommand(command="/start", description="شروع ربات")]
     await application.bot.set_my_commands(commands)
@@ -266,14 +274,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
-    # اگر دکمه بازگشت به منو بود و در انتظار فیش، وضعیت رو پاک کن و منو رو نمایش بده
+    # ** اضافه شده: پاسخ به بازگشت به منو حتی در حالت فیش **
     if text == "بازگشت به منو":
-        if user_states.get(user_id, "").startswith("awaiting_deposit_receipt_") or \
-           user_states.get(user_id, "").startswith("awaiting_subscription_receipt_"):
-            user_states.pop(user_id, None)
-            await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
-            return
-
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
         return
@@ -353,7 +355,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount = int(text)
             payment_id = await add_payment(user_id, amount, "increase_balance")
             await update.message.reply_text(
-                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
+                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n🏦 {BANK_CARD}",
                 reply_markup=get_back_keyboard()
             )
             user_states[user_id] = f"awaiting_deposit_receipt_{payment_id}"
@@ -375,97 +377,94 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payment_id = await add_payment(user_id, amount, "buy_subscription", description=text)
         await add_subscription(user_id, payment_id, text)
         await update.message.reply_text(
-            f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
+            f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n🏦 {BANK_CARD}",
             reply_markup=get_back_keyboard()
         )
         user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
         return
 
+    if text == "🎁 اشتراک تست رایگان":
+        await update.message.reply_text("🎁 اشتراک تست رایگان بزودی فعال می‌شود.", reply_markup=get_main_keyboard())
+        return
+
     if text == "📞 پشتیبانی":
-        await update.message.reply_text(
-            f"برای ارتباط با پشتیبانی، به آی‌دی زیر پیام دهید:\n@SupportBot\nیا با ادمین تماس بگیرید."
-        )
+        await update.message.reply_text("📞 پشتیبانی: https://t.me/teazadmin", reply_markup=get_main_keyboard())
         return
 
     if text == "💵 اعتبار رایگان":
-        # اضافه کردن اعتبار رایگان (مثلا ۲۰ هزار تومان)
-        await add_balance(user_id, 20000)
-        await update.message.reply_text("🎉 ۲۰,۰۰۰ تومان اعتبار رایگان به موجودی شما اضافه شد.", reply_markup=get_main_keyboard())
+        invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
+        try:
+            with open("invite_image.jpg", "rb") as photo:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=(
+                        f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                        "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
+                    ),
+                    reply_markup=get_main_keyboard()
+                )
+        except Exception:
+            await update.message.reply_text(
+                f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\nبرای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+                reply_markup=get_main_keyboard()
+            )
         return
 
     if text == "📂 اشتراک‌های من":
-        subs = await get_user_subscriptions(user_id)
-        if not subs:
-            await update.message.reply_text("شما هیچ اشتراکی ندارید.", reply_markup=get_main_keyboard())
-        else:
-            msg = "اشتراک‌های شما:\n"
-            for sid, plan, config, status, payment_id in subs:
-                msg += f"- {plan} ({status})\n"
-            await update.message.reply_text(msg, reply_markup=get_main_keyboard())
+        subscriptions = await get_user_subscriptions(user_id)
+        if not subscriptions:
+            await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
+            return
+        response = "📂 اشتراک‌های شما:\n\n"
+        for sub in subscriptions:
+            sub_id, plan, config, status, payment_id = sub
+            response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status=='active' else 'غیرفعال'}\n"
+            if config:
+                response += f"کانفیگ:\n{config}\n"
+            response += "\n"
+        await update.message.reply_text(response, reply_markup=get_main_keyboard())
         return
 
-    # Default fallback
-    await update.message.reply_text("لطفا یکی از گزینه‌ها را انتخاب کنید.", reply_markup=get_main_keyboard())
+    # اگر هیچکدوم هم نبود
+    await update.message.reply_text("⚠️ گزینه نامشخص است. لطفا از منو انتخاب کنید.", reply_markup=get_main_keyboard())
 
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
+    await query.answer()
     data = query.data
 
-    if not str(user_id) == str(ADMIN_ID):
-        await query.answer("شما اجازه دسترسی به این بخش را ندارید.", show_alert=True)
-        return
-
-    if data.startswith("approve_"):
+    if data.startswith("approve_") or data.startswith("reject_"):
         payment_id = int(data.split("_")[1])
-        payment = await db_execute("SELECT user_id, amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-        if payment:
-            payer_id, amount, ptype = payment
+        if data.startswith("approve_"):
             await update_payment_status(payment_id, "approved")
-            if ptype == "increase_balance":
-                await add_balance(payer_id, amount)
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.answer("پرداخت تایید شد.")
-
-            await application.bot.send_message(
-                chat_id=payer_id,
-                text="✅ فیش پرداخت شما تایید شد و موجودی شما به‌روزرسانی گردید."
-            )
+            payment = await db_execute("SELECT user_id, amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            if payment:
+                user_id, amount, ptype = payment
+                if ptype == "increase_balance":
+                    await add_balance(user_id, amount)
+                    await context.bot.send_message(user_id, f"💰 افزایش موجودی شما به مبلغ {amount} تومان تایید شد.")
+                elif ptype == "buy_subscription":
+                    await context.bot.send_message(user_id, f"💳 اشتراک شما تایید و فعال شد.")
+            await query.edit_message_caption(query.message.caption + "\n\n✅ تایید شد", reply_markup=None)
         else:
-            await query.answer("پرداخت پیدا نشد.", show_alert=True)
-
-    elif data.startswith("reject_"):
-        payment_id = int(data.split("_")[1])
-        payment = await db_execute("SELECT user_id FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-        if payment:
-            payer_id = payment[0]
             await update_payment_status(payment_id, "rejected")
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.answer("پرداخت رد شد.")
+            payment = await db_execute("SELECT user_id FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            if payment:
+                user_id = payment[0]
+                await context.bot.send_message(user_id, "❌ فیش پرداختی شما رد شد. لطفا مجدد ارسال کنید.")
+            await query.edit_message_caption(query.message.caption + "\n\n❌ رد شد", reply_markup=None)
 
-            await application.bot.send_message(
-                chat_id=payer_id,
-                text="❌ فیش پرداخت شما رد شد. لطفا دوباره ارسال کنید یا پشتیبانی تماس بگیرید."
-            )
-        else:
-            await query.answer("پرداخت پیدا نشد.", show_alert=True)
-
+# ---------- اجرای برنامه ----------
 @app.on_event("startup")
-async def on_startup():
+async def startup():
     init_db_pool()
     await create_tables()
     await set_bot_commands()
     await application.bot.set_webhook(WEBHOOK_URL)
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
-    application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.ALL, message_handler))
-    application.add_handler(CallbackQueryHandler(callback_query_handler))
-    await application.start()
-    await application.updater.start_polling()  # فقط در صورت نیاز به polling، در وب‌هوک باید حذف شود
 
 @app.on_event("shutdown")
-async def on_shutdown():
-    await application.stop()
+async def shutdown():
+    await application.bot.delete_webhook()
     close_db_pool()
 
 @app.post(WEBHOOK_PATH)
@@ -473,4 +472,13 @@ async def telegram_webhook(request: Request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
     await application.update_queue.put(update)
-    return {"ok": True}
+    return "OK"
+
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
+application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.ALL, message_handler))
+application.add_handler(CallbackQueryHandler(callback_query_handler))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
