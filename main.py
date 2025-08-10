@@ -98,6 +98,12 @@ def ensure_user(user_id, username, invited_by=None):
         cursor.execute("INSERT INTO users(user_id, username, invited_by) VALUES (?, ?, ?)",
                        (user_id, username, invited_by))
         conn.commit()
+        # اضافه کردن پاداش به دعوت‌کننده
+        if invited_by and invited_by != user_id:
+            cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
+            if cursor.fetchone():
+                add_balance(invited_by, 25000)  # پاداش 25,000 تومان به دعوت‌کننده
+                conn.commit()
 
 # ذخیره شماره تماس کاربر
 def save_user_phone(user_id, phone):
@@ -209,10 +215,23 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone_number = contact.phone_number
     save_user_phone(user_id, phone_number)
 
+    # ارسال پیام به ادمین
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=f"📞 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) شماره تماس خود را ارسال کرد:\n{phone_number}"
     )
+
+    # بررسی دعوت‌کننده و ارسال پیام پاداش
+    cursor.execute("SELECT invited_by FROM users WHERE user_id=?", (user_id,))
+    result = cursor.fetchone()
+    invited_by = result[0] if result and result[0] else None
+    if invited_by and invited_by != user_id:
+        cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
+        if cursor.fetchone():
+            await context.bot.send_message(
+                chat_id=invited_by,
+                text=f"🎉 دوست شما (@{update.effective_user.username or 'NoUsername'}) با موفقیت مراحل ثبت‌نام را تکمیل کرد!\n💰 ۲۵,۰۰۰ تومان به موجودی شما اضافه شد."
+            )
 
     await update.message.reply_text(
         "🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:",
@@ -346,11 +365,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💵 اعتبار رایگان":
         invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
-        await update.message.reply_text(
-            f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-            "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
-            reply_markup=get_main_keyboard()
-        )
+        with open("invite_image.jpg", "rb") as photo:
+            await update.message.reply_photo(
+                photo=photo,
+                caption=(
+                    f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                    "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
+                ),
+                reply_markup=get_main_keyboard()
+            )
         return
 
     if text == "📂 اشتراک‌های من":
@@ -431,9 +454,10 @@ async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args and len(args) > 0:
         try:
             invited_by = int(args[0])
+            if invited_by != update.effective_user.id:  # اطمینان از اینکه کاربر خودش نیست
+                context.user_data["invited_by"] = invited_by
         except:
-            invited_by = None
-        context.user_data["invited_by"] = invited_by
+            context.user_data["invited_by"] = None
     await start(update, context)
 
 # ثبت هندلرها
