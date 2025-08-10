@@ -2,7 +2,7 @@ import logging
 import sqlite3
 from fastapi import FastAPI, Request
 from telegram import (
-    Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+    Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 )
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
@@ -44,6 +44,14 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS payments(
     status TEXT,
     type TEXT,
     description TEXT
+)""")
+cursor.execute("""CREATE TABLE IF NOT EXISTS subscriptions(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    payment_id INTEGER,
+    plan TEXT,
+    config TEXT,
+    status TEXT DEFAULT 'active'
 )""")
 conn.commit()
 
@@ -122,13 +130,36 @@ def add_payment(user_id, amount, ptype, description=""):
     conn.commit()
     return cursor.lastrowid
 
+# ثبت اشتراک جدید
+def add_subscription(user_id, payment_id, plan):
+    cursor.execute(
+        "INSERT INTO subscriptions(user_id, payment_id, plan, status) VALUES (?, ?, ?, 'active')",
+        (user_id, payment_id, plan)
+    )
+    conn.commit()
+
+# آپدیت کانفیگ اشتراک
+def update_subscription_config(payment_id, config):
+    cursor.execute("UPDATE subscriptions SET config=? WHERE payment_id=?", (config, payment_id))
+    conn.commit()
+
 # آپدیت وضعیت پرداخت
 def update_payment_status(payment_id, status):
     cursor.execute("UPDATE payments SET status=? WHERE id=?", (status, payment_id))
     conn.commit()
 
+# دریافت اشتراک‌های کاربر
+def get_user_subscriptions(user_id):
+    cursor.execute("SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id=?", (user_id,))
+    return cursor.fetchall()
+
 # نگهداری وضعیت کاربر
 user_states = {}
+
+# تنظیم منوی دستورات
+async def set_bot_commands():
+    commands = [BotCommand(command="/start", description="شروع ربات")]
+    await application.bot.set_my_commands(commands)
 
 # /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -240,9 +271,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     buyer_id, description = payment
                     if update.message.text:
                         config = update.message.text
+                        update_subscription_config(payment_id, config)
                         await context.bot.send_message(
                             chat_id=buyer_id,
-                            text=f"✅ کانفیگ اشتراک شما ({description}) دریافت شد:\n{config}"
+                            text=f"✅ کانفیگ اشتراک شما ({description})\nکد خرید: #{payment_id}\nدریافت شد:\n```\n{config}\n```",
+                            parse_mode="Markdown"
                         )
                         await update.message.reply_text("✅ کانفیگ با موفقیت به خریدار ارسال شد.", reply_markup=None)
                         user_states.pop(user_id, None)
@@ -295,6 +328,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         amount = mapping[text]
         payment_id = add_payment(user_id, amount, "buy_subscription", description=text)
+        add_subscription(user_id, payment_id, text)
         await update.message.reply_text(
             f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n🏦 {BANK_CARD}",
             reply_markup=get_back_keyboard()
@@ -320,7 +354,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "📂 اشتراک‌های من":
-        await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
+        subscriptions = get_user_subscriptions(user_id)
+        if not subscriptions:
+            await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
+            return
+        response = "📂 اشتراک‌های شما:\n\n"
+        for sub in subscriptions:
+            sub_id, plan, config, status, payment_id = sub
+            response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
+            if config:
+                response += f"کانفیگ:\n```\n{config}\n```\n"
+            response += "--------------------\n"
+        await update.message.reply_text(response, reply_markup=get_main_keyboard(), parse_mode="Markdown")
         return
 
     await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
@@ -351,7 +396,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 await query.message.edit_reply_markup(None)
                 await query.message.reply_text("✅ پرداخت تایید شد.")
             elif ptype == "buy_subscription":
-                await context.bot.send_message(user_id, "✅ پرداخت تایید شد. اشتراک شما ارسال خواهد شد.")
+                await context.bot.send_message(user_id, f"✅ پرداخت تایید شد. اشتراک شما (کد خرید: #{payment_id}) ارسال خواهد شد.")
                 config_keyboard = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
                 ])
@@ -407,6 +452,7 @@ async def telegram_webhook(request: Request):
 @app.on_event("startup")
 async def on_startup():
     await application.bot.set_webhook(url=WEBHOOK_URL)
+    await set_bot_commands()  # تنظیم منوی دستورات
     print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
     await application.start()
