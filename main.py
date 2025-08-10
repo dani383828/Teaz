@@ -7,6 +7,7 @@ from telegram import (
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 )
+from photo_manager import get_invite_photo  # وارد کردن تابع مدیریت عکس
 
 # اطلاعات ربات
 TOKEN = "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
@@ -98,8 +99,6 @@ def ensure_user(user_id, username, invited_by=None):
         cursor.execute("INSERT INTO users(user_id, username, invited_by) VALUES (?, ?, ?)",
                        (user_id, username, invited_by))
         conn.commit()
-        return True  # کاربر جدید است
-    return False  # کاربر قبلاً وجود داشته
 
 # ذخیره شماره تماس کاربر
 def save_user_phone(user_id, phone):
@@ -178,15 +177,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     invited_by = context.user_data.get("invited_by")
-    is_new_user = ensure_user(user_id, username, invited_by)
-
-    # اگر کاربر جدید است و از طریق لینک دعوت آمده، پاداش به دعوت‌کننده اضافه شود
-    if is_new_user and invited_by and invited_by != user_id:
-        add_balance(invited_by, 25000)
-        await context.bot.send_message(
-            chat_id=invited_by,
-            text=f"🎉 یک کاربر جدید از طریق لینک دعوت شما ثبت‌نام کرد! ۲۵,۰۰۰ تومان به موجودی شما اضافه شد."
-        )
+    ensure_user(user_id, username, invited_by)
 
     phone = get_user_phone(user_id)
     if phone:
@@ -356,12 +347,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💵 اعتبار رایگان":
         invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
-        invite_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📩 دعوت دوستان", url=invite_link)]
-        ])
-        await update.message.reply_text(
-            "💵 لینک اختصاصی شما برای دعوت دوستان:\n\nبرای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
-            reply_markup=invite_keyboard
+        photo_file_id = get_invite_photo()  # دریافت file_id عکس از photo_manager
+        await update.message.reply_photo(
+            photo=photo_file_id,
+            caption=f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                    "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.\n"
+                    "⚠️ توجه: استفاده از لینک خودتان برای دریافت پاداش ممکن نیست!",
+            reply_markup=get_main_keyboard()
         )
         return
 
@@ -440,12 +432,15 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 # استارت با پارامتر
 async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
+    user_id = update.effective_user.id
     if args and len(args) > 0:
         try:
             invited_by = int(args[0])
+            # جلوگیری از دریافت پاداش برای کلیک روی لینک خود
+            if invited_by != user_id:
+                context.user_data["invited_by"] = invited_by
         except:
             invited_by = None
-        context.user_data["invited_by"] = invited_by
     await start(update, context)
 
 # ثبت هندلرها
