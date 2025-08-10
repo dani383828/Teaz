@@ -356,10 +356,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💵 اعتبار رایگان":
         invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
+        invite_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📩 دعوت دوستان", url=invite_link)]
+        ])
         await update.message.reply_text(
-            f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-            "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
-            reply_markup=get_main_keyboard()
+            "💵 لینک اختصاصی شما برای دعوت دوستان:\n\nبرای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+            reply_markup=invite_keyboard
         )
         return
 
