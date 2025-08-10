@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+from datetime import datetime, timedelta  # اضافه شده برای مدیریت زمان
 from fastapi import FastAPI, Request
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
@@ -8,7 +9,6 @@ from telegram import (
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 )
-from datetime import datetime, timedelta  # Added for timer functionality
 
 # ---------- تنظیمات اولیه ----------
 # اگر می‌خوای متغیرها از ENV خونده بشن، می‌تونی TOKEN رو هم از ENV بگیری.
@@ -16,7 +16,7 @@ TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzN
 CHANNEL_USERNAME = "@teazvpn"
 ADMIN_ID = 5542927340
 TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
-BANK_CARD = "5054 1610 1938 9760"  # Updated bank card number
+BANK_CARD = "0000 - 0000 - 0000 - 0000"
 
 # Webhook URL — اگر URL رندرت فرق داره اون رو تو REPLACE کن یا از ENV استفاده کن
 RENDER_BASE_URL = os.getenv("RENDER_BASE_URL") or "https://teaz.onrender.com"
@@ -110,7 +110,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     plan TEXT,
     config TEXT,
     status TEXT DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP  -- Added for timer
+    start_date TIMESTAMP,  -- اضافه شده
+    end_date TIMESTAMP    -- اضافه شده
 )
 """
 
@@ -191,9 +192,20 @@ async def add_payment(user_id, amount, ptype, description=""):
     return int(new_id)
 
 async def add_subscription(user_id, payment_id, plan):
+    # محاسبه زمان شروع و پایان بر اساس نوع پلن
+    start_date = datetime.now()
+    if plan == "۱ ماهه: ۹۰ هزار تومان":
+        end_date = start_date + timedelta(days=30)
+    elif plan == "۳ ماهه: ۲۵۰ هزار تومان":
+        end_date = start_date + timedelta(days=90)
+    elif plan == "۶ ماهه: ۴۵۰ هزار تومان":
+        end_date = start_date + timedelta(days=180)
+    else:
+        end_date = start_date  # در صورت خطا، زمان پایان برابر زمان شروع
+
     await db_execute(
-        "INSERT INTO subscriptions (user_id, payment_id, plan, status, created_at) VALUES (%s, %s, %s, 'active', CURRENT_TIMESTAMP)",
-        (user_id, payment_id, plan)
+        "INSERT INTO subscriptions (user_id, payment_id, plan, status, start_date, end_date) VALUES (%s, %s, %s, 'active', %s, %s)",
+        (user_id, payment_id, plan, start_date, end_date)
     )
 
 async def update_subscription_config(payment_id, config):
@@ -202,34 +214,20 @@ async def update_subscription_config(payment_id, config):
 async def update_payment_status(payment_id, status):
     await db_execute("UPDATE payments SET status = %s WHERE id = %s", (status, payment_id))
 
+async def update_subscription_status(sub_id, status):
+    await db_execute("UPDATE subscriptions SET status = %s WHERE id = %s", (status, sub_id))
+
 async def get_user_subscriptions(user_id):
     rows = await db_execute(
-        "SELECT id, plan, config, status, payment_id, created_at FROM subscriptions WHERE user_id = %s",
+        "SELECT id, plan, config, status, payment_id, start_date, end_date FROM subscriptions WHERE user_id = %s",
         (user_id,), fetch=True
     )
     return rows
 
-# ---------- محاسبه زمان باقی‌مانده اشتراک ----------
-def calculate_remaining_days(plan, created_at):
-    # Map plan to duration in months
-    plan_duration = {
-        "۱ ماهه: ۹۰ هزار تومان": 1,
-        "۳ ماهه: ۲۵۰ هزار تومان": 3,
-        "۶ ماهه: ۴۵۰ هزار تومان": 6
-    }
-    months = plan_duration.get(plan, 1)
-    duration = timedelta(days=months * 30)  # Approximate months as 30 days
-    expiry_date = created_at + duration
-    remaining = expiry_date - datetime.now()
-    remaining_days = max(0, remaining.days)
-    # Update status to expired if necessary
-    status = "active" if remaining_days > 0 else "expired"
-    return remaining_days, status
-
 # ---------- وضعیت کاربر در مموری (مثل قبلاً) ----------
 user_states = {}
 
-# ---------- دستورات و هندلرها ----------
+# ---------- دستورات و هندلرها (تقریباً همان کد قبلی، با فراخوانی DB های async) ----------
 async def set_bot_commands():
     commands = [BotCommand(command="/start", description="شروع ربات")]
     await application.bot.set_my_commands(commands)
@@ -307,12 +305,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
-    # Handle "Back to Menu" even when awaiting receipt
-    if text == "بازگشت به منو":
-        await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
-        user_states.pop(user_id, None)
-        return
-
     # ====== بررسی فیش پرداخت یا کانفیگ ارسالی توسط ادمین ======
     if update.message.photo or update.message.document or update.message.text:
         state = user_states.get(user_id)
@@ -371,6 +363,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.")
                     return
 
+    # بقیه بخش‌ها (همانند قبلی)
+    if text == "بازگشت به منو":
+        await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
+        user_states.pop(user_id, None)
+        return
+
     if text == "💰 موجودی":
         await update.message.reply_text("💰 بخش موجودی:\nیک گزینه را انتخاب کنید:", reply_markup=get_balance_keyboard())
         return
@@ -390,7 +388,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount = int(text)
             payment_id = await add_payment(user_id, amount, "increase_balance")
             await update.message.reply_text(
-                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n* یا *\n🏦 {BANK_CARD}",  # Added separator
+                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n🏦 {BANK_CARD}",
                 reply_markup=get_back_keyboard()
             )
             user_states[user_id] = f"awaiting_deposit_receipt_{payment_id}"
@@ -412,7 +410,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payment_id = await add_payment(user_id, amount, "buy_subscription", description=text)
         await add_subscription(user_id, payment_id, text)
         await update.message.reply_text(
-            f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n* یا *\n🏦 {BANK_CARD}",  # Added separator
+            f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n🏦 {BANK_CARD}",
             reply_markup=get_back_keyboard()
         )
         user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
@@ -452,15 +450,29 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
             return
         response = "📂 اشتراک‌های شما:\n\n"
+        now = datetime.now()
         for sub in subscriptions:
-            sub_id, plan, config, status, payment_id, created_at = sub
-            remaining_days, calc_status = calculate_remaining_days(plan, created_at)
-            # Update status in DB if expired
-            if calc_status == "expired" and status != "expired":
-                await db_execute("UPDATE subscriptions SET status = %s WHERE id = %s", ("expired", sub_id))
-                status = "expired"
-            response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'منقضی'}\n"
-            response += f"زمان باقی‌مانده: {remaining_days} روز\n"
+            sub_id, plan, config, status, payment_id, start_date, end_date = sub
+            # بررسی وضعیت اشتراک
+            if status == "active" and end_date and end_date < now:
+                await update_subscription_status(sub_id, "inactive")
+                status = "inactive"
+
+            # محاسبه زمان باقی‌مانده
+            time_left = ""
+            if status == "active" and end_date:
+                delta = end_date - now
+                if delta.total_seconds() > 0:
+                    days = delta.days
+                    hours = delta.seconds // 3600
+                    minutes = (delta.seconds % 3600) // 60
+                    time_left = f"⏳ زمان باقی‌مانده: {days} روز، {hours} ساعت، {minutes} دقیقه\n"
+                else:
+                    time_left = "⏳ منقضی شده\n"
+
+            response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
+            if time_left:
+                response += time_left
             if config:
                 response += f"کانفیگ:\n```\n{config}\n```\n"
             response += "--------------------\n"
