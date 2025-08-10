@@ -215,10 +215,23 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone_number = contact.phone_number
     save_user_phone(user_id, phone_number)
 
+    # ارسال پیام به ادمین
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=f"📞 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) شماره تماس خود را ارسال کرد:\n{phone_number}"
     )
+
+    # بررسی دعوت‌کننده و ارسال پیام پاداش
+    cursor.execute("SELECT invited_by FROM users WHERE user_id=?", (user_id,))
+    result = cursor.fetchone()
+    invited_by = result[0] if result and result[0] else None
+    if invited_by and invited_by != user_id:
+        cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
+        if cursor.fetchone():
+            await context.bot.send_message(
+                chat_id=invited_by,
+                text=f"🎉 دوست شما (@{update.effective_user.username or 'NoUsername'}) با موفقیت مراحل ثبت‌نام را تکمیل کرد!\n💰 ۲۵,۰۰۰ تومان به موجودی شما اضافه شد."
+            )
 
     await update.message.reply_text(
         "🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:",
