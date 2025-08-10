@@ -344,13 +344,13 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:",
-        reply_markup=get_main Keyboard()
+        reply_markup=get_main_keyboard()
     )
     user_states.pop(user_id, None)
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text = 更新.message.text if update.message.text else ""
+    text = update.message.text if update.message.text else ""
 
     # بررسی "بازگشت به منو" در هر حالت
     if text == "بازگشت به منو":
