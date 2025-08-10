@@ -21,10 +21,12 @@ RENDER_BASE_URL = os.getenv("RENDER_BASE_URL") or "https://teaz.onrender.com"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{RENDER_BASE_URL}{WEBHOOK_PATH}"
 
+# تنظیم لاگینگ با جزییات بیشتر
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 application = Application.builder().token(TOKEN).build()
@@ -40,13 +42,23 @@ db_pool: pool.ThreadedConnectionPool = None
 def init_db_pool():
     global db_pool
     if not DATABASE_URL:
+        logger.error("DATABASE_URL environment variable is not set.")
         raise RuntimeError("DATABASE_URL environment variable is not set.")
-    db_pool = psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
+    try:
+        db_pool = psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
+        logger.info("Database connection pool initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize database pool: {e}")
+        raise
 
 def close_db_pool():
     global db_pool
     if db_pool:
-        db_pool.closeall()
+        try:
+            db_pool.closeall()
+            logger.info("Database connection pool closed.")
+        except Exception as e:
+            logger.error(f"Error closing database pool: {e}")
         db_pool = None
 
 def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=False):
@@ -66,6 +78,9 @@ def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=Fa
         if not query.strip().lower().startswith("select"):
             conn.commit()
         return result
+    except Exception as e:
+        logger.error(f"Database query error: {query} - {e}")
+        raise
     finally:
         if cur:
             cur.close()
@@ -73,7 +88,11 @@ def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=Fa
             db_pool.putconn(conn)
 
 async def db_execute(query, params=(), fetch=False, fetchone=False, returning=False):
-    return await asyncio.to_thread(_db_execute_sync, query, params, fetch, fetchone, returning)
+    try:
+        return await asyncio.to_thread(_db_execute_sync, query, params, fetch, fetchone, returning)
+    except Exception as e:
+        logger.error(f"Async database execution failed: {e}")
+        raise
 
 # ---------- ساخت جداول (Postgres) ----------
 CREATE_USERS_SQL = """
@@ -108,9 +127,14 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 """
 
 async def create_tables():
-    await db_execute(CREATE_USERS_SQL)
-    await db_execute(CREATE_PAYMENTS_SQL)
-    await db_execute(CREATE_SUBSCRIPTIONS_SQL)
+    try:
+        await db_execute(CREATE_USERS_SQL)
+        await db_execute(CREATE_PAYMENTS_SQL)
+        await db_execute(CREATE_SUBSCRIPTIONS_SQL)
+        logger.info("Database tables created successfully.")
+    except Exception as e:
+        logger.error(f"Error creating database tables: {e}")
+        raise
 
 # ---------- کیبوردها ----------
 def get_main_keyboard():
@@ -145,7 +169,8 @@ async def is_user_member(user_id):
     try:
         member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "administrator", "creator"]
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error checking user membership: {e}")
         return False
 
 async def ensure_user(user_id, username, invited_by=None):
@@ -219,32 +244,42 @@ def calculate_remaining_days(start_date, plan):
 
 # ---------- بررسی اشتراک‌ها برای اعلان و غیرفعال‌سازی ----------
 async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
-    subscriptions = await db_execute(
-        "SELECT id, user_id, plan, status, start_date, payment_id FROM subscriptions WHERE status = 'active'",
-        fetch=True
-    )
-    for sub in subscriptions:
-        sub_id, user_id, plan, status, start_date, payment_id = sub
-        remaining_days = calculate_remaining_days(start_date, plan)
-        if remaining_days == 0:
-            await update_subscription_status(sub_id, "inactive")
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"❌ اشتراک شما (کد خرید: #{payment_id} - {plan}) منقضی شد. برای تمدید به بخش خرید اشتراک مراجعه کنید."
-            )
-        elif remaining_days == 1:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"⚠️ اشتراک شما (کد خرید: #{payment_id} - {plan}) فردا منقضی می‌شود. لطفاً برای تمدید اقدام کنید."
-            )
+    try:
+        subscriptions = await db_execute(
+            "SELECT id, user_id, plan, status, start_date, payment_id FROM subscriptions WHERE status = 'active'",
+            fetch=True
+        )
+        for sub in subscriptions:
+            sub_id, user_id, plan, status, start_date, payment_id = sub
+            remaining_days = calculate_remaining_days(start_date, plan)
+            if remaining_days == 0:
+                await update_subscription_status(sub_id, "inactive")
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"❌ اشتراک شما (کد خرید: #{payment_id} - {plan}) منقضی شد. برای تمدید به بخش خرید اشتراک مراجعه کنید."
+                )
+                logger.info(f"Subscription {sub_id} for user {user_id} marked as inactive.")
+            elif remaining_days == 1:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"⚠️ اشتراک شما (کد خرید: #{payment_id} - {plan}) فردا منقضی می‌شود. لطفاً برای تمدید اقدام کنید."
+                )
+                logger.info(f"Sent expiry warning for subscription {sub_id} to user {user_id}.")
+    except Exception as e:
+        logger.error(f"Error in check_subscriptions: {e}")
 
 # ---------- وضعیت کاربر در مموری ----------
 user_states = {}
 
 # ---------- دستورات و هندلرها ----------
 async def set_bot_commands():
-    commands = [BotCommand(command="/start", description="شروع ربات")]
-    await application.bot.set_my_commands(commands)
+    try:
+        commands = [BotCommand(command="/start", description="شروع ربات")]
+        await application.bot.set_my_commands(commands)
+        logger.info("Bot commands set successfully.")
+    except Exception as e:
+        logger.error(f"Error setting bot commands: {e}")
+        raise
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -309,13 +344,13 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_main Keyboard()
     )
     user_states.pop(user_id, None)
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text = update.message.text if update.message.text else ""
+    text = 更新.message.text if update.message.text else ""
 
     # بررسی "بازگشت به منو" در هر حالت
     if text == "بازگشت به منو":
@@ -551,36 +586,70 @@ application.add_handler(CallbackQueryHandler(admin_callback_handler))
 # ---------- webhook endpoint ----------
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.update_queue.put(update)
-    return {"ok": True}
+    try:
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+        await application.update_queue.put(update)
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Error in webhook: {e}")
+        return {"ok": False}
 
 # ---------- lifecycle events ----------
 @app.on_event("startup")
 async def on_startup():
-    init_db_pool()
-    await create_tables()
     try:
-        await application.bot.set_webhook(url=WEBHOOK_URL)
+        logger.info("Starting application...")
+        # Step 1: Initialize database pool
+        logger.info("Initializing database pool...")
+        init_db_pool()
+        logger.info("Creating database tables...")
+        await create_tables()
+
+        # Step 2: Set webhook
+        logger.info(f"Setting webhook: {WEBHOOK_URL}")
+        try:
+            await application.bot.set_webhook(url=WEBHOOK_URL)
+            logger.info("Webhook set successfully.")
+        except Exception as e:
+            logger.error(f"Failed to set webhook: {e}")
+            raise
+
+        # Step 3: Set bot commands
+        logger.info("Setting bot commands...")
+        await set_bot_commands()
+
+        # Step 4: Initialize and start application
+        logger.info("Initializing application...")
+        await application.initialize()
+        logger.info("Starting application...")
+        await application.start()
+
+        # Step 5: Schedule subscription check job
+        logger.info("Scheduling subscription check job...")
+        application.job_queue.run_repeating(check_subscriptions, interval=86400, first=10)
+        logger.info("Application startup completed successfully.")
     except Exception as e:
-        logging.exception("Error setting webhook: %s", e)
-    await set_bot_commands()
-    await application.initialize()
-    await application.start()
-    # برنامه‌ریزی بررسی روزانه اشتراک‌ها
-    application.job_queue.run_repeating(check_subscriptions, interval=86400, first=10)  # هر 24 ساعت
-    print("✅ Webhook set:", WEBHOOK_URL)
+        logger.error(f"Application startup failed: {e}")
+        raise
 
 @app.on_event("shutdown")
 async def on_shutdown():
     try:
+        logger.info("Shutting down application...")
         await application.stop()
         await application.shutdown()
+        logger.info("Application stopped successfully.")
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
     finally:
         close_db_pool()
 
 # ---------- اجرای محلی (برای debug) ----------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    except Exception as e:
+        logger.error(f"Error running uvicorn: {e}")
+        raise
