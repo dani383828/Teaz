@@ -9,6 +9,7 @@ from telegram import (
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 )
+import importlib.util
 
 # ---------- تنظیمات اولیه ----------
 TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
@@ -24,12 +25,30 @@ WEBHOOK_URL = f"{RENDER_BASE_URL}{WEBHOOK_PATH}"
 # تنظیم لاگینگ با جزییات بیشتر
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.DEBUG  # تغییر به DEBUG برای جزئیات بیشتر
 )
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-application = None  # به‌صورت global تعریف می‌کنیم تا بعداً مقداردهی بشه
+application = None
+
+# ---------- چک کردن وابستگی‌ها ----------
+def check_dependencies():
+    required_modules = ["fastapi", "uvicorn", "telegram", "psycopg2"]
+    for module in required_modules:
+        if not importlib.util.find_spec(module):
+            logger.error(f"Dependency {module} is not installed.")
+            raise ImportError(f"Dependency {module} is not installed.")
+    logger.info("All required dependencies are installed.")
+
+# ---------- چک کردن متغیرهای محیطی ----------
+def check_environment():
+    required_env_vars = ["BOT_TOKEN", "DATABASE_URL", "RENDER_BASE_URL"]
+    for var in required_env_vars:
+        if not os.getenv(var):
+            logger.error(f"Environment variable {var} is not set.")
+            raise RuntimeError(f"Environment variable {var} is not set.")
+    logger.info("All required environment variables are set.")
 
 # ---------- PostgreSQL connection pool (psycopg2) ----------
 import psycopg2
@@ -41,12 +60,9 @@ db_pool: pool.ThreadedConnectionPool = None
 
 def init_db_pool():
     global db_pool
-    if not DATABASE_URL:
-        logger.error("DATABASE_URL environment variable is not set.")
-        raise RuntimeError("DATABASE_URL environment variable is not set.")
     try:
+        logger.debug("Attempting to initialize database pool...")
         db_pool = psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
-        # تست اتصال
         conn = db_pool.getconn()
         conn.close()
         logger.info("Database connection pool initialized and tested successfully.")
@@ -131,6 +147,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 
 async def create_tables():
     try:
+        logger.debug("Creating database tables...")
         await db_execute(CREATE_USERS_SQL)
         await db_execute(CREATE_PAYMENTS_SQL)
         await db_execute(CREATE_SUBSCRIPTIONS_SQL)
@@ -277,6 +294,7 @@ user_states = {}
 # ---------- دستورات و هندلرها ----------
 async def set_bot_commands():
     try:
+        logger.debug("Setting bot commands...")
         commands = [BotCommand(command="/start", description="شروع ربات")]
         await application.bot.set_my_commands(commands)
         logger.info("Bot commands set successfully.")
@@ -583,6 +601,7 @@ async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- ثبت هندلرها ----------
 def register_handlers():
     try:
+        logger.debug("Registering handlers...")
         application.add_handler(CommandHandler("start", start_with_param))
         application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
         application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
@@ -613,41 +632,52 @@ async def telegram_webhook(request: Request):
 async def on_startup():
     global application
     try:
-        logger.info("Starting application...")
-        # Step 1: Initialize Telegram application
-        logger.info("Initializing Telegram application...")
+        logger.info("Starting application at %s...", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+        # Step 1: Check environment variables
+        logger.debug("Checking environment variables...")
+        check_environment()
+
+        # Step 2: Check dependencies
+        logger.debug("Checking dependencies...")
+        check_dependencies()
+
+        # Step 3: Initialize Telegram application
+        logger.debug("Initializing Telegram application...")
         application = Application.builder().token(TOKEN).build()
         register_handlers()
+        logger.info("Telegram application initialized.")
 
-        # Step 2: Initialize database pool
-        logger.info("Initializing database pool...")
+        # Step 4: Initialize database pool
+        logger.debug("Initializing database pool...")
         init_db_pool()
-        logger.info("Creating database tables...")
+        logger.debug("Creating database tables...")
         await create_tables()
 
-        # Step 3: Set webhook with fallback to polling
-        logger.info(f"Attempting to set webhook: {WEBHOOK_URL}")
+        # Step 5: Set webhook with fallback to polling
+        logger.debug(f"Attempting to set webhook: {WEBHOOK_URL}")
         try:
             await application.bot.set_webhook(url=WEBHOOK_URL)
             logger.info("Webhook set successfully.")
         except Exception as e:
             logger.warning(f"Failed to set webhook: {e}. Falling back to polling...")
+            await application.bot.delete_webhook()  # پاک کردن وب‌هوک قبلی
             application.run_polling(allowed_updates=Update.ALL_TYPES)
             logger.info("Application started in polling mode.")
 
-        # Step 4: Set bot commands
-        logger.info("Setting bot commands...")
+        # Step 6: Set bot commands
+        logger.debug("Setting bot commands...")
         await set_bot_commands()
 
-        # Step 5: Initialize and start application (if not polling)
+        # Step 7: Initialize and start application (if not polling)
         if not application.running:
-            logger.info("Initializing application...")
+            logger.debug("Initializing application...")
             await application.initialize()
-            logger.info("Starting application...")
+            logger.debug("Starting application...")
             await application.start()
 
-        # Step 6: Schedule subscription check job
-        logger.info("Scheduling subscription check job...")
+        # Step 8: Schedule subscription check job
+        logger.debug("Scheduling subscription check job...")
         application.job_queue.run_repeating(check_subscriptions, interval=86400, first=10)
         logger.info("Application startup completed successfully.")
     except Exception as e:
@@ -671,6 +701,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     try:
+        logger.info("Starting uvicorn locally...")
         uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
     except Exception as e:
         logger.error(f"Error running uvicorn: {e}")
