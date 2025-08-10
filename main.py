@@ -1,7 +1,6 @@
 import os
 import logging
 import asyncio
-from datetime import datetime, timedelta  # اضافه شده برای مدیریت زمان
 from fastapi import FastAPI, Request
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
@@ -109,9 +108,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     payment_id INTEGER,
     plan TEXT,
     config TEXT,
-    status TEXT DEFAULT 'active',
-    start_date TIMESTAMP,  -- اضافه شده
-    end_date TIMESTAMP    -- اضافه شده
+    status TEXT DEFAULT 'active'
 )
 """
 
@@ -192,20 +189,9 @@ async def add_payment(user_id, amount, ptype, description=""):
     return int(new_id)
 
 async def add_subscription(user_id, payment_id, plan):
-    # محاسبه زمان شروع و پایان بر اساس نوع پلن
-    start_date = datetime.now()
-    if plan == "۱ ماهه: ۹۰ هزار تومان":
-        end_date = start_date + timedelta(days=30)
-    elif plan == "۳ ماهه: ۲۵۰ هزار تومان":
-        end_date = start_date + timedelta(days=90)
-    elif plan == "۶ ماهه: ۴۵۰ هزار تومان":
-        end_date = start_date + timedelta(days=180)
-    else:
-        end_date = start_date  # در صورت خطا، زمان پایان برابر زمان شروع
-
     await db_execute(
-        "INSERT INTO subscriptions (user_id, payment_id, plan, status, start_date, end_date) VALUES (%s, %s, %s, 'active', %s, %s)",
-        (user_id, payment_id, plan, start_date, end_date)
+        "INSERT INTO subscriptions (user_id, payment_id, plan, status) VALUES (%s, %s, %s, 'active')",
+        (user_id, payment_id, plan)
     )
 
 async def update_subscription_config(payment_id, config):
@@ -214,14 +200,8 @@ async def update_subscription_config(payment_id, config):
 async def update_payment_status(payment_id, status):
     await db_execute("UPDATE payments SET status = %s WHERE id = %s", (status, payment_id))
 
-async def update_subscription_status(sub_id, status):
-    await db_execute("UPDATE subscriptions SET status = %s WHERE id = %s", (status, sub_id))
-
 async def get_user_subscriptions(user_id):
-    rows = await db_execute(
-        "SELECT id, plan, config, status, payment_id, start_date, end_date FROM subscriptions WHERE user_id = %s",
-        (user_id,), fetch=True
-    )
+    rows = await db_execute("SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id = %s", (user_id,), fetch=True)
     return rows
 
 # ---------- وضعیت کاربر در مموری (مثل قبلاً) ----------
@@ -450,29 +430,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
             return
         response = "📂 اشتراک‌های شما:\n\n"
-        now = datetime.now()
         for sub in subscriptions:
-            sub_id, plan, config, status, payment_id, start_date, end_date = sub
-            # بررسی وضعیت اشتراک
-            if status == "active" and end_date and end_date < now:
-                await update_subscription_status(sub_id, "inactive")
-                status = "inactive"
-
-            # محاسبه زمان باقی‌مانده
-            time_left = ""
-            if status == "active" and end_date:
-                delta = end_date - now
-                if delta.total_seconds() > 0:
-                    days = delta.days
-                    hours = delta.seconds // 3600
-                    minutes = (delta.seconds % 3600) // 60
-                    time_left = f"⏳ زمان باقی‌مانده: {days} روز، {hours} ساعت، {minutes} دقیقه\n"
-                else:
-                    time_left = "⏳ منقضی شده\n"
-
+            sub_id, plan, config, status, payment_id = sub
             response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
-            if time_left:
-                response += time_left
             if config:
                 response += f"کانفیگ:\n```\n{config}\n```\n"
             response += "--------------------\n"
