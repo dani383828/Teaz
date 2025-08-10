@@ -48,9 +48,12 @@ supabase: Client = create_client(
 def init_database():
     try:
         # چک کردن وجود جدول users
-        supabase.table("users").select("*").limit(1).execute()
+        response = supabase.table("users").select("*").limit(1).execute()
+        if response.data is not None:
+            print("Table 'users' already exists")
     except Exception as e:
         if "Could not find the table" in str(e):
+            print("Creating table 'users'")
             supabase.rpc("execute_sql", {
                 "query": """
                 CREATE TABLE public.users (
@@ -65,9 +68,12 @@ def init_database():
 
     try:
         # چک کردن وجود جدول payments
-        supabase.table("payments").select("*").limit(1).execute()
+        response = supabase.table("payments").select("*").limit(1).execute()
+        if response.data is not None:
+            print("Table 'payments' already exists")
     except Exception as e:
         if "Could not find the table" in str(e):
+            print("Creating table 'payments'")
             supabase.rpc("execute_sql", {
                 "query": """
                 CREATE TABLE public.payments (
@@ -83,9 +89,12 @@ def init_database():
 
     try:
         # چک کردن وجود جدول subscriptions
-        supabase.table("subscriptions").select("*").limit(1).execute()
+        response = supabase.table("subscriptions").select("*").limit(1).execute()
+        if response.data is not None:
+            print("Table 'subscriptions' already exists")
     except Exception as e:
         if "Could not find the table" in str(e):
+            print("Creating table 'subscriptions'")
             supabase.rpc("execute_sql", {
                 "query": """
                 CREATE TABLE public.subscriptions (
@@ -139,8 +148,8 @@ async def is_user_member(user_id):
 
 # ذخیره یا اطمینان از وجود کاربر
 def ensure_user(user_id, username, invited_by=None):
-    user = supabase.table("users").select("user_id").eq("user_id", user_id).execute()
-    if not user.data:
+    response = supabase.table("users").select("user_id").eq("user_id", user_id).execute()
+    if not response.data:
         supabase.table("users").insert({
             "user_id": user_id,
             "username": username,
@@ -160,8 +169,8 @@ def save_user_phone(user_id, phone):
 
 # دریافت شماره تماس کاربر
 def get_user_phone(user_id):
-    res = supabase.table("users").select("phone").eq("user_id", user_id).execute()
-    return res.data[0]["phone"] if res.data else None
+    response = supabase.table("users").select("phone").eq("user_id", user_id).execute()
+    return response.data[0]["phone"] if response.data else None
 
 # افزایش موجودی
 def add_balance(user_id, amount):
@@ -170,19 +179,19 @@ def add_balance(user_id, amount):
 
 # دریافت موجودی
 def get_balance(user_id):
-    res = supabase.table("users").select("balance").eq("user_id", user_id).execute()
-    return res.data[0]["balance"] if res.data else 0
+    response = supabase.table("users").select("balance").eq("user_id", user_id).execute()
+    return response.data[0]["balance"] if response.data else 0
 
 # ثبت پرداخت جدید
 def add_payment(user_id, amount, ptype, description=""):
-    res = supabase.table("payments").insert({
+    response = supabase.table("payments").insert({
         "user_id": user_id,
         "amount": amount,
         "status": "pending",
         "type": ptype,
         "description": description
     }).execute()
-    return res.data[0]["id"] if res.data else None
+    return response.data[0]["id"] if response.data else None
 
 # ثبت اشتراک جدید
 def add_subscription(user_id, payment_id, plan):
@@ -203,8 +212,8 @@ def update_payment_status(payment_id, status):
 
 # دریافت اشتراک‌های کاربر
 def get_user_subscriptions(user_id):
-    res = supabase.table("subscriptions").select("id, plan, config, status, payment_id").eq("user_id", user_id).execute()
-    return [(row["id"], row["plan"], row["config"], row["status"], row["payment_id"]) for row in res.data]
+    response = supabase.table("subscriptions").select("id, plan, config, status, payment_id").eq("user_id", user_id).execute()
+    return [(row["id"], row["plan"], row["config"], row["status"], row["payment_id"]) for row in response.data]
 
 # نگهداری وضعیت کاربر
 user_states = {}
@@ -269,8 +278,8 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # بررسی دعوت‌کننده و ارسال پیام پاداش
-    res = supabase.table("users").select("invited_by").eq("user_id", user_id).execute()
-    invited_by = res.data[0]["invited_by"] if res.data and res.data[0]["invited_by"] else None
+    response = supabase.table("users").select("invited_by").eq("user_id", user_id).execute()
+    invited_by = response.data[0]["invited_by"] if response.data and response.data[0]["invited_by"] else None
     if invited_by and invited_by != user_id:
         inviter = supabase.table("users").select("user_id").eq("user_id", invited_by).execute()
         if inviter.data:
