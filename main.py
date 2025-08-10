@@ -98,6 +98,8 @@ def ensure_user(user_id, username, invited_by=None):
         cursor.execute("INSERT INTO users(user_id, username, invited_by) VALUES (?, ?, ?)",
                        (user_id, username, invited_by))
         conn.commit()
+        return True  # کاربر جدید است
+    return False  # کاربر قبلاً وجود داشته
 
 # ذخیره شماره تماس کاربر
 def save_user_phone(user_id, phone):
@@ -176,20 +178,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     invited_by = context.user_data.get("invited_by")
-    ensure_user(user_id, username, invited_by)
+    is_new_user = ensure_user(user_id, username, invited_by)
 
-    # پاداش دعوت
-    if invited_by:
-        cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
-        if cursor.fetchone():
-            add_balance(invited_by, 25000)
-            try:
-                await context.bot.send_message(
-                    chat_id=invited_by,
-                    text=f"🎉 یک نفر با لینک دعوت شما ثبت‌نام کرد! ۲۵,۰۰۰ تومان به موجودی شما اضافه شد."
-                )
-            except:
-                pass  # در صورت خطا در ارسال پیام، ادامه می‌دهیم
+    # اگر کاربر جدید است و از طریق لینک دعوت آمده، پاداش به دعوت‌کننده اضافه شود
+    if is_new_user and invited_by and invited_by != user_id:
+        add_balance(invited_by, 25000)
+        await context.bot.send_message(
+            chat_id=invited_by,
+            text=f"🎉 یک کاربر جدید از طریق لینک دعوت شما ثبت‌نام کرد! ۲۵,۰۰۰ تومان به موجودی شما اضافه شد."
+        )
 
     phone = get_user_phone(user_id)
     if phone:
