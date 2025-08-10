@@ -50,10 +50,10 @@ def init_database():
         # چک کردن وجود جدول users
         response = supabase.table("users").select("*").limit(1).execute()
         if response.data is not None:
-            print("Table 'users' already exists")
+            logging.info("Table 'users' already exists")
     except Exception as e:
         if "Could not find the table" in str(e):
-            print("Creating table 'users'")
+            logging.info("Creating table 'users'")
             supabase.rpc("execute_sql", {
                 "query": """
                 CREATE TABLE public.users (
@@ -70,10 +70,10 @@ def init_database():
         # چک کردن وجود جدول payments
         response = supabase.table("payments").select("*").limit(1).execute()
         if response.data is not None:
-            print("Table 'payments' already exists")
+            logging.info("Table 'payments' already exists")
     except Exception as e:
         if "Could not find the table" in str(e):
-            print("Creating table 'payments'")
+            logging.info("Creating table 'payments'")
             supabase.rpc("execute_sql", {
                 "query": """
                 CREATE TABLE public.payments (
@@ -91,10 +91,10 @@ def init_database():
         # چک کردن وجود جدول subscriptions
         response = supabase.table("subscriptions").select("*").limit(1).execute()
         if response.data is not None:
-            print("Table 'subscriptions' already exists")
+            logging.info("Table 'subscriptions' already exists")
     except Exception as e:
         if "Could not find the table" in str(e):
-            print("Creating table 'subscriptions'")
+            logging.info("Creating table 'subscriptions'")
             supabase.rpc("execute_sql", {
                 "query": """
                 CREATE TABLE public.subscriptions (
@@ -420,13 +420,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💵 اعتبار رایگان":
         invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
-        with open("invite_image.jpg", "rb") as photo:
-            await update.message.reply_photo(
-                photo=photo,
-                caption=(
-                    f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                    "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
-                ),
+        try:
+            with open("invite_image.jpg", "rb") as photo:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=(
+                        f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                        "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
+                    ),
+                    reply_markup=get_main_keyboard()
+                )
+        except FileNotFoundError:
+            await update.message.reply_text(
+                f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
                 reply_markup=get_main_keyboard()
             )
         return
@@ -521,7 +528,7 @@ application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
 
-@app.post(WEBHOOK_PATH)
+@app.post(WHOOK_PATH)
 async def telegram_webhook(request: Request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
@@ -532,7 +539,7 @@ async def telegram_webhook(request: Request):
 async def on_startup():
     await application.bot.set_webhook(url=WEBHOOK_URL)
     await set_bot_commands()  # تنظیم منوی دستورات
-    print("✅ Webhook set:", WEBHOOK_URL)
+    logging.info("✅ Webhook set: %s", WEBHOOK_URL)
     await application.initialize()
     await application.start()
 
