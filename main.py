@@ -29,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-application = Application.builder().token(TOKEN).build()
+application = None  # به‌صورت global تعریف می‌کنیم تا بعداً مقداردهی بشه
 
 # ---------- PostgreSQL connection pool (psycopg2) ----------
 import psycopg2
@@ -46,7 +46,10 @@ def init_db_pool():
         raise RuntimeError("DATABASE_URL environment variable is not set.")
     try:
         db_pool = psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
-        logger.info("Database connection pool initialized successfully.")
+        # تست اتصال
+        conn = db_pool.getconn()
+        conn.close()
+        logger.info("Database connection pool initialized and tested successfully.")
     except Exception as e:
         logger.error(f"Failed to initialize database pool: {e}")
         raise
@@ -578,10 +581,16 @@ async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 # ---------- ثبت هندلرها ----------
-application.add_handler(CommandHandler("start", start_with_param))
-application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
-application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
-application.add_handler(CallbackQueryHandler(admin_callback_handler))
+def register_handlers():
+    try:
+        application.add_handler(CommandHandler("start", start_with_param))
+        application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
+        application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
+        application.add_handler(CallbackQueryHandler(admin_callback_handler))
+        logger.info("Handlers registered successfully.")
+    except Exception as e:
+        logger.error(f"Error registering handlers: {e}")
+        raise
 
 # ---------- webhook endpoint ----------
 @app.post(WEBHOOK_PATH)
@@ -589,7 +598,11 @@ async def telegram_webhook(request: Request):
     try:
         data = await request.json()
         update = Update.de_json(data, application.bot)
-        await application.update_queue.put(update)
+        if update:
+            await application.update_queue.put(update)
+            logger.debug("Webhook update processed successfully.")
+        else:
+            logger.warning("Received invalid update from Telegram.")
         return {"ok": True}
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
@@ -598,34 +611,42 @@ async def telegram_webhook(request: Request):
 # ---------- lifecycle events ----------
 @app.on_event("startup")
 async def on_startup():
+    global application
     try:
         logger.info("Starting application...")
-        # Step 1: Initialize database pool
+        # Step 1: Initialize Telegram application
+        logger.info("Initializing Telegram application...")
+        application = Application.builder().token(TOKEN).build()
+        register_handlers()
+
+        # Step 2: Initialize database pool
         logger.info("Initializing database pool...")
         init_db_pool()
         logger.info("Creating database tables...")
         await create_tables()
 
-        # Step 2: Set webhook
-        logger.info(f"Setting webhook: {WEBHOOK_URL}")
+        # Step 3: Set webhook with fallback to polling
+        logger.info(f"Attempting to set webhook: {WEBHOOK_URL}")
         try:
             await application.bot.set_webhook(url=WEBHOOK_URL)
             logger.info("Webhook set successfully.")
         except Exception as e:
-            logger.error(f"Failed to set webhook: {e}")
-            raise
+            logger.warning(f"Failed to set webhook: {e}. Falling back to polling...")
+            application.run_polling(allowed_updates=Update.ALL_TYPES)
+            logger.info("Application started in polling mode.")
 
-        # Step 3: Set bot commands
+        # Step 4: Set bot commands
         logger.info("Setting bot commands...")
         await set_bot_commands()
 
-        # Step 4: Initialize and start application
-        logger.info("Initializing application...")
-        await application.initialize()
-        logger.info("Starting application...")
-        await application.start()
+        # Step 5: Initialize and start application (if not polling)
+        if not application.running:
+            logger.info("Initializing application...")
+            await application.initialize()
+            logger.info("Starting application...")
+            await application.start()
 
-        # Step 5: Schedule subscription check job
+        # Step 6: Schedule subscription check job
         logger.info("Scheduling subscription check job...")
         application.job_queue.run_repeating(check_subscriptions, interval=86400, first=10)
         logger.info("Application startup completed successfully.")
@@ -637,9 +658,10 @@ async def on_startup():
 async def on_shutdown():
     try:
         logger.info("Shutting down application...")
-        await application.stop()
-        await application.shutdown()
-        logger.info("Application stopped successfully.")
+        if application:
+            await application.stop()
+            await application.shutdown()
+            logger.info("Application stopped successfully.")
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
     finally:
