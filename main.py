@@ -363,12 +363,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id] = "awaiting_deposit_amount"
         return
 
+    # ...
+
     if user_states.get(user_id) == "awaiting_deposit_amount":
         if text.isdigit():
             amount = int(text)
             payment_id = await add_payment(user_id, amount, "increase_balance")
             await update.message.reply_text(
-                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n🏦 {BANK_CARD}",
+                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
                 reply_markup=get_back_keyboard()
             )
             user_states[user_id] = f"awaiting_deposit_receipt_{payment_id}"
@@ -376,10 +378,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ لطفا عدد وارد کنید.")
         return
 
-    if text == "💳 خرید اشتراک":
-        await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard())
-        return
-
+    # ... مشابه همین در خرید اشتراک:
     if text in ["۱ ماهه: ۹۰ هزار تومان", "۳ ماهه: ۲۵۰ هزار تومان", "۶ ماهه: ۴۵۰ هزار تومان"]:
         mapping = {
             "۱ ماهه: ۹۰ هزار تومان": 90000,
@@ -390,10 +389,23 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payment_id = await add_payment(user_id, amount, "buy_subscription", description=text)
         await add_subscription(user_id, payment_id, text)
         await update.message.reply_text(
-            f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n🏦 {BANK_CARD}",
+            f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
             reply_markup=get_back_keyboard()
         )
         user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+        return
+
+    # تغییر این بخش در ابتدای message_handler برای کنترل دکمه بازگشت به منو:
+    if text == "بازگشت به منو":
+        # اگر در حالت انتظار ارسال فیش بود، وضعیت پاک کن و منو نشان بده
+        if user_states.get(user_id, "").startswith("awaiting_deposit_receipt_") or \
+           user_states.get(user_id, "").startswith("awaiting_subscription_receipt_"):
+            user_states.pop(user_id, None)
+            await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
+            return
+
+        await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
+        user_states.pop(user_id, None)
         return
 
     if text == "🎁 اشتراک تست رایگان":
