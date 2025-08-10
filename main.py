@@ -1,5 +1,5 @@
 import logging
-import os
+import sqlite3
 from fastapi import FastAPI, Request
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
@@ -7,15 +7,6 @@ from telegram import (
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 )
-from supabase import create_client, Client
-import httpx
-
-# کلاینت HTTP سفارشی برای رفع خطای proxy
-class CustomHTTPClient(httpx.Client):
-    def __init__(self, *args, **kwargs):
-        kwargs.pop("proxy", None)  # حذف پارامتر proxy
-        kwargs.pop("proxies", None)  # حذف پارامتر proxies
-        super().__init__(*args, **kwargs)
 
 # اطلاعات ربات
 TOKEN = "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
@@ -35,80 +26,34 @@ logging.basicConfig(
 app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
-# اتصال به Supabase
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(
-    SUPABASE_URL,
-    SUPABASE_KEY,
-    options={"http_client": CustomHTTPClient()}
-)
+# دیتابیس sqlite ساده
+conn = sqlite3.connect("vpnbot.db", check_same_thread=False)
+cursor = conn.cursor()
 
-# ایجاد جداول در Supabase (در صورت عدم وجود)
-def init_database():
-    try:
-        # چک کردن وجود جدول users
-        response = supabase.table("users").select("*").limit(1).execute()
-        if response.data is not None:
-            logging.info("Table 'users' already exists")
-    except Exception as e:
-        if "Could not find the table" in str(e):
-            logging.info("Creating table 'users'")
-            supabase.rpc("execute_sql", {
-                "query": """
-                CREATE TABLE public.users (
-                    user_id BIGINT PRIMARY KEY,
-                    username TEXT,
-                    balance BIGINT DEFAULT 0,
-                    invited_by BIGINT,
-                    phone TEXT
-                );
-                """
-            }).execute()
-
-    try:
-        # چک کردن وجود جدول payments
-        response = supabase.table("payments").select("*").limit(1).execute()
-        if response.data is not None:
-            logging.info("Table 'payments' already exists")
-    except Exception as e:
-        if "Could not find the table" in str(e):
-            logging.info("Creating table 'payments'")
-            supabase.rpc("execute_sql", {
-                "query": """
-                CREATE TABLE public.payments (
-                    id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-                    user_id BIGINT NOT NULL,
-                    amount BIGINT NOT NULL,
-                    status TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    description TEXT
-                );
-                """
-            }).execute()
-
-    try:
-        # چک کردن وجود جدول subscriptions
-        response = supabase.table("subscriptions").select("*").limit(1).execute()
-        if response.data is not None:
-            logging.info("Table 'subscriptions' already exists")
-    except Exception as e:
-        if "Could not find the table" in str(e):
-            logging.info("Creating table 'subscriptions'")
-            supabase.rpc("execute_sql", {
-                "query": """
-                CREATE TABLE public.subscriptions (
-                    id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-                    user_id BIGINT NOT NULL,
-                    payment_id BIGINT NOT NULL,
-                    plan TEXT NOT NULL,
-                    config TEXT,
-                    status TEXT DEFAULT 'active' NOT NULL
-                );
-                """
-            }).execute()
-
-init_database()
+cursor.execute("""CREATE TABLE IF NOT EXISTS users(
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    balance INTEGER DEFAULT 0,
+    invited_by INTEGER,
+    phone TEXT DEFAULT NULL
+)""")
+cursor.execute("""CREATE TABLE IF NOT EXISTS payments(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    amount INTEGER,
+    status TEXT,
+    type TEXT,
+    description TEXT
+)""")
+cursor.execute("""CREATE TABLE IF NOT EXISTS subscriptions(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    payment_id INTEGER,
+    plan TEXT,
+    config TEXT,
+    status TEXT DEFAULT 'active'
+)""")
+conn.commit()
 
 # کلیدهای کیبورد
 def get_main_keyboard():
@@ -148,72 +93,71 @@ async def is_user_member(user_id):
 
 # ذخیره یا اطمینان از وجود کاربر
 def ensure_user(user_id, username, invited_by=None):
-    response = supabase.table("users").select("user_id").eq("user_id", user_id).execute()
-    if not response.data:
-        supabase.table("users").insert({
-            "user_id": user_id,
-            "username": username,
-            "invited_by": invited_by,
-            "balance": 0,
-            "phone": None
-        }).execute()
+    cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
+    if cursor.fetchone() is None:
+        cursor.execute("INSERT INTO users(user_id, username, invited_by) VALUES (?, ?, ?)",
+                       (user_id, username, invited_by))
+        conn.commit()
         # اضافه کردن پاداش به دعوت‌کننده
         if invited_by and invited_by != user_id:
-            inviter = supabase.table("users").select("user_id").eq("user_id", invited_by).execute()
-            if inviter.data:
-                add_balance(invited_by, 25000)
+            cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
+            if cursor.fetchone():
+                add_balance(invited_by, 25000)  # پاداش 25,000 تومان به دعوت‌کننده
+                conn.commit()
 
 # ذخیره شماره تماس کاربر
 def save_user_phone(user_id, phone):
-    supabase.table("users").update({"phone": phone}).eq("user_id", user_id).execute()
+    cursor.execute("UPDATE users SET phone=? WHERE user_id=?", (phone, user_id))
+    conn.commit()
 
 # دریافت شماره تماس کاربر
 def get_user_phone(user_id):
-    response = supabase.table("users").select("phone").eq("user_id", user_id).execute()
-    return response.data[0]["phone"] if response.data else None
+    cursor.execute("SELECT phone FROM users WHERE user_id=?", (user_id,))
+    res = cursor.fetchone()
+    return res[0] if res else None
 
 # افزایش موجودی
 def add_balance(user_id, amount):
-    current_balance = get_balance(user_id)
-    supabase.table("users").update({"balance": current_balance + amount}).eq("user_id", user_id).execute()
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
+    conn.commit()
 
 # دریافت موجودی
 def get_balance(user_id):
-    response = supabase.table("users").select("balance").eq("user_id", user_id).execute()
-    return response.data[0]["balance"] if response.data else 0
+    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
+    res = cursor.fetchone()
+    return res[0] if res else 0
 
 # ثبت پرداخت جدید
 def add_payment(user_id, amount, ptype, description=""):
-    response = supabase.table("payments").insert({
-        "user_id": user_id,
-        "amount": amount,
-        "status": "pending",
-        "type": ptype,
-        "description": description
-    }).execute()
-    return response.data[0]["id"] if response.data else None
+    cursor.execute(
+        "INSERT INTO payments(user_id, amount, status, type, description) VALUES (?, ?, 'pending', ?, ?)",
+        (user_id, amount, ptype, description)
+    )
+    conn.commit()
+    return cursor.lastrowid
 
 # ثبت اشتراک جدید
 def add_subscription(user_id, payment_id, plan):
-    supabase.table("subscriptions").insert({
-        "user_id": user_id,
-        "payment_id": payment_id,
-        "plan": plan,
-        "status": "active"
-    }).execute()
+    cursor.execute(
+        "INSERT INTO subscriptions(user_id, payment_id, plan, status) VALUES (?, ?, ?, 'active')",
+        (user_id, payment_id, plan)
+    )
+    conn.commit()
 
 # آپدیت کانفیگ اشتراک
 def update_subscription_config(payment_id, config):
-    supabase.table("subscriptions").update({"config": config}).eq("payment_id", payment_id).execute()
+    cursor.execute("UPDATE subscriptions SET config=? WHERE payment_id=?", (config, payment_id))
+    conn.commit()
 
 # آپدیت وضعیت پرداخت
 def update_payment_status(payment_id, status):
-    supabase.table("payments").update({"status": status}).eq("id", payment_id).execute()
+    cursor.execute("UPDATE payments SET status=? WHERE id=?", (status, payment_id))
+    conn.commit()
 
 # دریافت اشتراک‌های کاربر
 def get_user_subscriptions(user_id):
-    response = supabase.table("subscriptions").select("id, plan, config, status, payment_id").eq("user_id", user_id).execute()
-    return [(row["id"], row["plan"], row["config"], row["status"], row["payment_id"]) for row in response.data]
+    cursor.execute("SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id=?", (user_id,))
+    return cursor.fetchall()
 
 # نگهداری وضعیت کاربر
 user_states = {}
@@ -278,11 +222,12 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # بررسی دعوت‌کننده و ارسال پیام پاداش
-    response = supabase.table("users").select("invited_by").eq("user_id", user_id).execute()
-    invited_by = response.data[0]["invited_by"] if response.data and response.data[0]["invited_by"] else None
+    cursor.execute("SELECT invited_by FROM users WHERE user_id=?", (user_id,))
+    result = cursor.fetchone()
+    invited_by = result[0] if result and result[0] else None
     if invited_by and invited_by != user_id:
-        inviter = supabase.table("users").select("user_id").eq("user_id", invited_by).execute()
-        if inviter.data:
+        cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
+        if cursor.fetchone():
             await context.bot.send_message(
                 chat_id=invited_by,
                 text=f"🎉 دوست شما (@{update.effective_user.username or 'NoUsername'}) با موفقیت مراحل ثبت‌نام را تکمیل کرد!\n💰 ۲۵,۰۰۰ تومان به موجودی شما اضافه شد."
@@ -309,9 +254,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 payment_id = None
 
             if payment_id:
-                payment = supabase.table("payments").select("amount, type").eq("id", payment_id).execute()
-                if payment.data:
-                    amount, ptype = payment.data[0]["amount"], payment.data[0]["type"]
+                payment = cursor.execute("SELECT amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
+                if payment:
+                    amount, ptype = payment
                     caption = f"💳 فیش پرداختی از کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}):\n"
                     caption += f"مبلغ: {amount}\nنوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}"
 
@@ -340,9 +285,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 payment_id = None
 
             if payment_id:
-                payment = supabase.table("payments").select("user_id, description").eq("id", payment_id).execute()
-                if payment.data:
-                    buyer_id, description = payment.data[0]["user_id"], payment.data[0]["description"]
+                payment = cursor.execute("SELECT user_id, description FROM payments WHERE id=?", (payment_id,)).fetchone()
+                if payment:
+                    buyer_id, description = payment
                     if update.message.text:
                         config = update.message.text
                         update_subscription_config(payment_id, config)
@@ -420,20 +365,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💵 اعتبار رایگان":
         invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
-        try:
-            with open("invite_image.jpg", "rb") as photo:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=(
-                        f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                        "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
-                    ),
-                    reply_markup=get_main_keyboard()
-                )
-        except FileNotFoundError:
-            await update.message.reply_text(
-                f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+        with open("invite_image.jpg", "rb") as photo:
+            await update.message.reply_photo(
+                photo=photo,
+                caption=(
+                    f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                    "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
+                ),
                 reply_markup=get_main_keyboard()
             )
         return
@@ -468,11 +406,11 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         if data.startswith("approve_"):
             payment_id = int(data.split("_")[1])
-            payment = supabase.table("payments").select("user_id, amount, type, description").eq("id", payment_id).execute()
-            if not payment.data:
+            payment = cursor.execute("SELECT user_id, amount, type, description FROM payments WHERE id=?", (payment_id,)).fetchone()
+            if not payment:
                 await query.message.reply_text("⚠️ پرداخت یافت نشد.")
                 return
-            user_id, amount, ptype, description = payment.data[0]["user_id"], payment.data[0]["amount"], payment.data[0]["type"], payment.data[0]["description"]
+            user_id, amount, ptype, description = payment
 
             update_payment_status(payment_id, "approved")
             if ptype == "increase_balance":
@@ -490,11 +428,11 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         elif data.startswith("reject_"):
             payment_id = int(data.split("_")[1])
-            payment = supabase.table("payments").select("user_id, amount, type").eq("id", payment_id).execute()
-            if not payment.data:
+            payment = cursor.execute("SELECT user_id, amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
+            if not payment:
                 await query.message.reply_text("⚠️ پرداخت یافت نشد.")
                 return
-            user_id, amount, ptype = payment.data[0]["user_id"], payment.data[0]["amount"], payment.data[0]["type"]
+            user_id, amount, ptype = payment
 
             update_payment_status(payment_id, "rejected")
             await context.bot.send_message(user_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
@@ -503,8 +441,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         elif data.startswith("send_config_"):
             payment_id = int(data.split("_")[-1])
-            payment = supabase.table("payments").select("user_id, description").eq("id", payment_id).execute()
-            if not payment.data:
+            payment = cursor.execute("SELECT user_id, description FROM payments WHERE id=?", (payment_id,)).fetchone()
+            if not payment:
                 await query.message.reply_text("⚠️ پرداخت یافت نشد.")
                 return
             await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
@@ -539,7 +477,7 @@ async def telegram_webhook(request: Request):
 async def on_startup():
     await application.bot.set_webhook(url=WEBHOOK_URL)
     await set_bot_commands()  # تنظیم منوی دستورات
-    logging.info("✅ Webhook set: %s", WEBHOOK_URL)
+    print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
     await application.start()
 
