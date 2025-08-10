@@ -1,5 +1,6 @@
+import os
 import logging
-import sqlite3
+import asyncio
 from fastapi import FastAPI, Request
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
@@ -8,15 +9,18 @@ from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 )
 
-# اطلاعات ربات
-TOKEN = "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
+# ---------- تنظیمات اولیه ----------
+# اگر می‌خوای متغیرها از ENV خونده بشن، می‌تونی TOKEN رو هم از ENV بگیری.
+TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
 CHANNEL_USERNAME = "@teazvpn"
 ADMIN_ID = 5542927340
-TRON_ADDRESS = "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb"
+TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
 BANK_CARD = "0000 - 0000 - 0000 - 0000"
 
+# Webhook URL — اگر URL رندرت فرق داره اون رو تو REPLACE کن یا از ENV استفاده کن
+RENDER_BASE_URL = os.getenv("RENDER_BASE_URL") or "https://teaz.onrender.com"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = f"https://teaz.onrender.com{WEBHOOK_PATH}"
+WEBHOOK_URL = f"{RENDER_BASE_URL}{WEBHOOK_PATH}"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -26,36 +30,94 @@ logging.basicConfig(
 app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
-# دیتابیس sqlite ساده
-conn = sqlite3.connect("vpnbot.db", check_same_thread=False)
-cursor = conn.cursor()
+# ---------- PostgreSQL connection pool (psycopg2) ----------
+# requirements.txt: psycopg2-binary==2.9.9
+import psycopg2
+from psycopg2 import pool
 
-cursor.execute("""CREATE TABLE IF NOT EXISTS users(
-    user_id INTEGER PRIMARY KEY,
+DATABASE_URL = os.getenv("DATABASE_URL")  # 반드시 در Render ست کن
+
+db_pool: pool.ThreadedConnectionPool = None
+
+def init_db_pool():
+    global db_pool
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL environment variable is not set.")
+    # حداقل و حداکثر کانکشن (می‌تونی کم و زیاد کنی)
+    db_pool = psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
+
+def close_db_pool():
+    global db_pool
+    if db_pool:
+        db_pool.closeall()
+        db_pool = None
+
+# اجرای کوئری‌های همگام در یک thread (برای جلوگیری از بلاک شدن ایونت لوپ)
+def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=False):
+    conn = None
+    cur = None
+    try:
+        conn = db_pool.getconn()
+        cur = conn.cursor()
+        cur.execute(query, params)
+        result = None
+        if returning:
+            result = cur.fetchone()[0]
+        elif fetchone:
+            result = cur.fetchone()
+        elif fetch:
+            result = cur.fetchall()
+        # commit فقط زمانی که داده تغییر کرده (INSERT/UPDATE/DELETE)؛
+        # برای SELECT نیازی نیست. ساده‌ترین راه: اگر query با SELECT شروع نشد، commit کن.
+        if not query.strip().lower().startswith("select"):
+            conn.commit()
+        return result
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            db_pool.putconn(conn)
+
+async def db_execute(query, params=(), fetch=False, fetchone=False, returning=False):
+    return await asyncio.to_thread(_db_execute_sync, query, params, fetch, fetchone, returning)
+
+# ---------- ساخت جداول (Postgres) ----------
+CREATE_USERS_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    user_id BIGINT PRIMARY KEY,
     username TEXT,
-    balance INTEGER DEFAULT 0,
-    invited_by INTEGER,
-    phone TEXT DEFAULT NULL
-)""")
-cursor.execute("""CREATE TABLE IF NOT EXISTS payments(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    amount INTEGER,
+    balance BIGINT DEFAULT 0,
+    invited_by BIGINT,
+    phone TEXT
+)
+"""
+CREATE_PAYMENTS_SQL = """
+CREATE TABLE IF NOT EXISTS payments (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT,
+    amount BIGINT,
     status TEXT,
     type TEXT,
     description TEXT
-)""")
-cursor.execute("""CREATE TABLE IF NOT EXISTS subscriptions(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
+)
+"""
+CREATE_SUBSCRIPTIONS_SQL = """
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT,
     payment_id INTEGER,
     plan TEXT,
     config TEXT,
     status TEXT DEFAULT 'active'
-)""")
-conn.commit()
+)
+"""
 
-# کلیدهای کیبورد
+async def create_tables():
+    await db_execute(CREATE_USERS_SQL)
+    await db_execute(CREATE_PAYMENTS_SQL)
+    await db_execute(CREATE_SUBSCRIPTIONS_SQL)
+
+# ---------- کیبوردها (همان کد قبلی) ----------
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton("💰 موجودی"), KeyboardButton("💳 خرید اشتراک")],
@@ -83,91 +145,73 @@ def get_subscription_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# بررسی عضویت
+# ---------- توابع DB معادل sqlite که قبلاً داشتی ----------
+# is_user_member از API تلگرام همانند قبل
 async def is_user_member(user_id):
     try:
         member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "administrator", "creator"]
-    except:
+    except Exception:
         return False
 
-# ذخیره یا اطمینان از وجود کاربر
-def ensure_user(user_id, username, invited_by=None):
-    cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
-    if cursor.fetchone() is None:
-        cursor.execute("INSERT INTO users(user_id, username, invited_by) VALUES (?, ?, ?)",
-                       (user_id, username, invited_by))
-        conn.commit()
-        # اضافه کردن پاداش به دعوت‌کننده
+async def ensure_user(user_id, username, invited_by=None):
+    # وجود کاربر را چک کن
+    row = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+    if not row:
+        await db_execute(
+            "INSERT INTO users (user_id, username, invited_by) VALUES (%s, %s, %s)",
+            (user_id, username, invited_by)
+        )
+        # پاداش دعوت‌کننده
         if invited_by and invited_by != user_id:
-            cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
-            if cursor.fetchone():
-                add_balance(invited_by, 25000)  # پاداش 25,000 تومان به دعوت‌کننده
-                conn.commit()
+            inviter = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (invited_by,), fetchone=True)
+            if inviter:
+                await add_balance(invited_by, 25000)
 
-# ذخیره شماره تماس کاربر
-def save_user_phone(user_id, phone):
-    cursor.execute("UPDATE users SET phone=? WHERE user_id=?", (phone, user_id))
-    conn.commit()
+async def save_user_phone(user_id, phone):
+    await db_execute("UPDATE users SET phone = %s WHERE user_id = %s", (phone, user_id))
 
-# دریافت شماره تماس کاربر
-def get_user_phone(user_id):
-    cursor.execute("SELECT phone FROM users WHERE user_id=?", (user_id,))
-    res = cursor.fetchone()
-    return res[0] if res else None
+async def get_user_phone(user_id):
+    row = await db_execute("SELECT phone FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+    return row[0] if row else None
 
-# افزایش موجودی
-def add_balance(user_id, amount):
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
-    conn.commit()
+async def add_balance(user_id, amount):
+    await db_execute("UPDATE users SET balance = COALESCE(balance,0) + %s WHERE user_id = %s", (amount, user_id))
 
-# دریافت موجودی
-def get_balance(user_id):
-    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    res = cursor.fetchone()
-    return res[0] if res else 0
+async def get_balance(user_id):
+    row = await db_execute("SELECT balance FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+    return int(row[0]) if row and row[0] is not None else 0
 
-# ثبت پرداخت جدید
-def add_payment(user_id, amount, ptype, description=""):
-    cursor.execute(
-        "INSERT INTO payments(user_id, amount, status, type, description) VALUES (?, ?, 'pending', ?, ?)",
-        (user_id, amount, ptype, description)
-    )
-    conn.commit()
-    return cursor.lastrowid
+async def add_payment(user_id, amount, ptype, description=""):
+    # RETURNING id
+    query = "INSERT INTO payments (user_id, amount, status, type, description) VALUES (%s, %s, 'pending', %s, %s) RETURNING id"
+    new_id = await db_execute(query, (user_id, amount, ptype, description), returning=True)
+    return int(new_id)
 
-# ثبت اشتراک جدید
-def add_subscription(user_id, payment_id, plan):
-    cursor.execute(
-        "INSERT INTO subscriptions(user_id, payment_id, plan, status) VALUES (?, ?, ?, 'active')",
+async def add_subscription(user_id, payment_id, plan):
+    await db_execute(
+        "INSERT INTO subscriptions (user_id, payment_id, plan, status) VALUES (%s, %s, %s, 'active')",
         (user_id, payment_id, plan)
     )
-    conn.commit()
 
-# آپدیت کانفیگ اشتراک
-def update_subscription_config(payment_id, config):
-    cursor.execute("UPDATE subscriptions SET config=? WHERE payment_id=?", (config, payment_id))
-    conn.commit()
+async def update_subscription_config(payment_id, config):
+    await db_execute("UPDATE subscriptions SET config = %s WHERE payment_id = %s", (config, payment_id))
 
-# آپدیت وضعیت پرداخت
-def update_payment_status(payment_id, status):
-    cursor.execute("UPDATE payments SET status=? WHERE id=?", (status, payment_id))
-    conn.commit()
+async def update_payment_status(payment_id, status):
+    await db_execute("UPDATE payments SET status = %s WHERE id = %s", (status, payment_id))
 
-# دریافت اشتراک‌های کاربر
-def get_user_subscriptions(user_id):
-    cursor.execute("SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id=?", (user_id,))
-    return cursor.fetchall()
+async def get_user_subscriptions(user_id):
+    rows = await db_execute("SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id = %s", (user_id,), fetch=True)
+    return rows
 
-# نگهداری وضعیت کاربر
+# ---------- وضعیت کاربر در مموری (مثل قبلاً) ----------
 user_states = {}
 
-# تنظیم منوی دستورات
+# ---------- دستورات و هندلرها (تقریباً همان کد قبلی، با فراخوانی DB های async) ----------
 async def set_bot_commands():
     commands = [BotCommand(command="/start", description="شروع ربات")]
     await application.bot.set_my_commands(commands)
 
-# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
@@ -182,9 +226,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     invited_by = context.user_data.get("invited_by")
-    ensure_user(user_id, username, invited_by)
+    await ensure_user(user_id, username, invited_by)
 
-    phone = get_user_phone(user_id)
+    phone = await get_user_phone(user_id)
     if phone:
         await update.message.reply_text(
             f"🌐 به فروشگاه VPN ما خوش آمدید!\nشماره تماس شما: {phone}\nیک گزینه را انتخاب کنید:",
@@ -202,7 +246,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     user_states[user_id] = "awaiting_contact"
 
-# دریافت شماره تماس
 async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_states.get(user_id) != "awaiting_contact":
@@ -213,7 +256,7 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     phone_number = contact.phone_number
-    save_user_phone(user_id, phone_number)
+    await save_user_phone(user_id, phone_number)
 
     # ارسال پیام به ادمین
     await context.bot.send_message(
@@ -222,12 +265,11 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # بررسی دعوت‌کننده و ارسال پیام پاداش
-    cursor.execute("SELECT invited_by FROM users WHERE user_id=?", (user_id,))
-    result = cursor.fetchone()
-    invited_by = result[0] if result and result[0] else None
+    row = await db_execute("SELECT invited_by FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+    invited_by = row[0] if row and row[0] else None
     if invited_by and invited_by != user_id:
-        cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
-        if cursor.fetchone():
+        inviter_exists = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (invited_by,), fetchone=True)
+        if inviter_exists:
             await context.bot.send_message(
                 chat_id=invited_by,
                 text=f"🎉 دوست شما (@{update.effective_user.username or 'NoUsername'}) با موفقیت مراحل ثبت‌نام را تکمیل کرد!\n💰 ۲۵,۰۰۰ تومان به موجودی شما اضافه شد."
@@ -239,7 +281,6 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     user_states.pop(user_id, None)
 
-# هندل پیام‌ها
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
@@ -254,7 +295,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 payment_id = None
 
             if payment_id:
-                payment = cursor.execute("SELECT amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
+                payment = await db_execute("SELECT amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
                 if payment:
                     amount, ptype = payment
                     caption = f"💳 فیش پرداختی از کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}):\n"
@@ -285,12 +326,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 payment_id = None
 
             if payment_id:
-                payment = cursor.execute("SELECT user_id, description FROM payments WHERE id=?", (payment_id,)).fetchone()
+                payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
                 if payment:
                     buyer_id, description = payment
                     if update.message.text:
                         config = update.message.text
-                        update_subscription_config(payment_id, config)
+                        await update_subscription_config(payment_id, config)
                         await context.bot.send_message(
                             chat_id=buyer_id,
                             text=f"✅ کانفیگ اشتراک شما ({description})\nکد خرید: #{payment_id}\nدریافت شد:\n```\n{config}\n```",
@@ -302,7 +343,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.")
                     return
 
-    # بقیه بخش‌ها
+    # بقیه بخش‌ها (همانند قبلی)
     if text == "بازگشت به منو":
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
@@ -313,7 +354,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "نمایش موجودی":
-        bal = get_balance(user_id)
+        bal = await get_balance(user_id)
         await update.message.reply_text(f"💰 موجودی شما: {bal} تومان", reply_markup=get_balance_keyboard())
         return
 
@@ -325,7 +366,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_states.get(user_id) == "awaiting_deposit_amount":
         if text.isdigit():
             amount = int(text)
-            payment_id = add_payment(user_id, amount, "increase_balance")
+            payment_id = await add_payment(user_id, amount, "increase_balance")
             await update.message.reply_text(
                 f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n🏦 {BANK_CARD}",
                 reply_markup=get_back_keyboard()
@@ -346,8 +387,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "۶ ماهه: ۴۵۰ هزار تومان": 450000
         }
         amount = mapping[text]
-        payment_id = add_payment(user_id, amount, "buy_subscription", description=text)
-        add_subscription(user_id, payment_id, text)
+        payment_id = await add_payment(user_id, amount, "buy_subscription", description=text)
+        await add_subscription(user_id, payment_id, text)
         await update.message.reply_text(
             f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n🏦 {BANK_CARD}",
             reply_markup=get_back_keyboard()
@@ -365,19 +406,26 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💵 اعتبار رایگان":
         invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
-        with open("invite_image.jpg", "rb") as photo:
-            await update.message.reply_photo(
-                photo=photo,
-                caption=(
-                    f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                    "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
-                ),
+        try:
+            with open("invite_image.jpg", "rb") as photo:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=(
+                        f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                        "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
+                    ),
+                    reply_markup=get_main_keyboard()
+                )
+        except Exception:
+            # اگر عکس نبود، فقط متن بفرست
+            await update.message.reply_text(
+                f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\nبرای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
                 reply_markup=get_main_keyboard()
             )
         return
 
     if text == "📂 اشتراک‌های من":
-        subscriptions = get_user_subscriptions(user_id)
+        subscriptions = await get_user_subscriptions(user_id)
         if not subscriptions:
             await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
             return
@@ -393,7 +441,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
 
-# تایید/رد توسط ادمین
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -406,15 +453,15 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         if data.startswith("approve_"):
             payment_id = int(data.split("_")[1])
-            payment = cursor.execute("SELECT user_id, amount, type, description FROM payments WHERE id=?", (payment_id,)).fetchone()
+            payment = await db_execute("SELECT user_id, amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
             if not payment:
                 await query.message.reply_text("⚠️ پرداخت یافت نشد.")
                 return
             user_id, amount, ptype, description = payment
 
-            update_payment_status(payment_id, "approved")
+            await update_payment_status(payment_id, "approved")
             if ptype == "increase_balance":
-                add_balance(user_id, amount)
+                await add_balance(user_id, amount)
                 await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
                 await query.message.edit_reply_markup(None)
                 await query.message.reply_text("✅ پرداخت تایید شد.")
@@ -428,27 +475,26 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         elif data.startswith("reject_"):
             payment_id = int(data.split("_")[1])
-            payment = cursor.execute("SELECT user_id, amount, type FROM payments WHERE id=?", (payment_id,)).fetchone()
+            payment = await db_execute("SELECT user_id, amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
             if not payment:
                 await query.message.reply_text("⚠️ پرداخت یافت نشد.")
                 return
             user_id, amount, ptype = payment
 
-            update_payment_status(payment_id, "rejected")
+            await update_payment_status(payment_id, "rejected")
             await context.bot.send_message(user_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
             await query.message.edit_reply_markup(None)
             await query.message.reply_text("❌ پرداخت رد شد.")
 
         elif data.startswith("send_config_"):
             payment_id = int(data.split("_")[-1])
-            payment = cursor.execute("SELECT user_id, description FROM payments WHERE id=?", (payment_id,)).fetchone()
+            payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
             if not payment:
                 await query.message.reply_text("⚠️ پرداخت یافت نشد.")
                 return
             await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
             user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
 
-# استارت با پارامتر
 async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if args and len(args) > 0:
@@ -460,12 +506,13 @@ async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["invited_by"] = None
     await start(update, context)
 
-# ثبت هندلرها
+# ---------- ثبت هندلرها ----------
 application.add_handler(CommandHandler("start", start_with_param))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
 
+# ---------- webhook endpoint ----------
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -473,15 +520,36 @@ async def telegram_webhook(request: Request):
     await application.update_queue.put(update)
     return {"ok": True}
 
+# ---------- lifecycle events ----------
 @app.on_event("startup")
 async def on_startup():
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    await set_bot_commands()  # تنظیم منوی دستورات
-    print("✅ Webhook set:", WEBHOOK_URL)
+    # init pool and tables
+    init_db_pool()
+    await create_tables()
+
+    # ثبت وبهوک تلگرام
+    try:
+        await application.bot.set_webhook(url=WEBHOOK_URL)
+    except Exception as e:
+        logging.exception("Error setting webhook: %s", e)
+
+    # تنظیم دستورات
+    await set_bot_commands()
+
+    # initialize and start application
     await application.initialize()
     await application.start()
+    print("✅ Webhook set:", WEBHOOK_URL)
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    await application.stop()
-    await application.shutdown()
+    try:
+        await application.stop()
+        await application.shutdown()
+    finally:
+        close_db_pool()
+
+# ---------- اجرای محلی (برای debug) ----------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
