@@ -151,8 +151,9 @@ def update_payment_status(payment_id, status):
 
 # دریافت اشتراک‌های کاربر
 def get_user_subscriptions(user_id):
-    cursor.execute("SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id=?", (user_id,))
-    return cursor.fetchall()
+ pagination = 1
+ cursor.execute(f"SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id=? LIMIT {pagination}", (user_id,))
+ return cursor.fetchall()
 
 # نگهداری وضعیت کاربر
 user_states = {}
@@ -346,15 +347,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "💵 اعتبار رایگان":
-        invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
-        photo_file_id = get_invite_photo()  # دریافت file_id عکس از photo_manager
-        await update.message.reply_photo(
-            photo=photo_file_id,
-            caption=f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                    "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.\n"
-                    "⚠️ توجه: استفاده از لینک خودتان برای دریافت پاداش ممکن نیست!",
-            reply_markup=get_main_keyboard()
-        )
+        try:
+            invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
+            photo_file_id = get_invite_photo()  # دریافت file_id عکس از photo_manager
+            await update.message.reply_photo(
+                photo=photo_file_id,
+                caption=f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                        "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.\n"
+                        "⚠️ توجه: استفاده از لینک خودتان برای دریافت پاداش ممکن نیست!",
+                reply_markup=get_main_keyboard()
+            )
+        except Exception as e:
+            logging.error(f"Error in sending invite photo: {e}")
+            await update.message.reply_text(
+                "⚠️ مشکلی در ارسال عکس دعوت پیش آمد. لطفاً با پشتیبانی تماس بگیرید.",
+                reply_markup=get_main_keyboard()
+            )
         return
 
     if text == "📂 اشتراک‌های من":
