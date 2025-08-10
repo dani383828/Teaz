@@ -1,7 +1,7 @@
 import os
 import logging
 import asyncio
-from datetime import datetime, timedelta  # برای مدیریت تایمر
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
@@ -15,7 +15,7 @@ TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzN
 CHANNEL_USERNAME = "@teazvpn"
 ADMIN_ID = 5542927340
 TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
-BANK_CARD = "5054 1610 1938 9760"  # شماره کارت جدید
+BANK_CARD = "5054 1610 1938 9760"
 
 RENDER_BASE_URL = os.getenv("RENDER_BASE_URL") or "https://teaz.onrender.com"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     plan TEXT,
     config TEXT,
     status TEXT DEFAULT 'active',
-    expires_at TIMESTAMP  -- ستون جدید برای زمان انقضا
+    expires_at TIMESTAMP
 )
 """
 
@@ -180,7 +180,6 @@ async def add_payment(user_id, amount, ptype, description=""):
     return int(new_id)
 
 async def add_subscription(user_id, payment_id, plan):
-    # تنظیم زمان انقضا بر اساس پلن
     plan_duration = {
         "۱ ماهه: ۹۰ هزار تومان": timedelta(days=30),
         "۳ ماهه: ۲۵۰ هزار تومان": timedelta(days=90),
@@ -206,7 +205,7 @@ async def get_user_subscriptions(user_id):
         "SELECT id, plan, config, status, payment_id, expires_at FROM subscriptions WHERE user_id = %s",
         (user_id,), fetch=True
     )
-    return rows
+    return rows or []  # اگر None باشد، لیست خالی برگردان
 
 # ---------- وضعیت کاربر در مموری ----------
 user_states = {}
@@ -377,7 +376,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount = int(text)
             payment_id = await add_payment(user_id, amount, "increase_balance")
             await update.message.reply_text(
-                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n*\n🏦 {BANK_CARD}",  # افزودن * بین آدرس و شماره کارت
+                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n*\n🏦 {BANK_CARD}",
                 reply_markup=get_back_keyboard()
             )
             user_states[user_id] = f"awaiting_deposit_receipt_{payment_id}"
@@ -389,7 +388,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard())
         return
 
-    if text in ["۱ ماهه: ۹۰ هزار تومان", "۳ ماهه: ۲۵۰ هزار تومان", "۶ ماهه: ۴۵۰ هزار تومان"]:
+    # اصلاح شرط برای گزینه‌های اشتراک
+    subscription_options = ["۱ ماهه: ۹۰ هزار تومان", "۳ ماهه: ۲۵۰ هزار تومان", "۶ ماهه: ۴۵۰ هزار تومان"]
+    if text in subscription_options:
         mapping = {
             "۱ ماهه: ۹۰ هزار تومان": 90000,
             "۳ ماهه: ۲۵۰ هزار تومان": 250000,
@@ -399,7 +400,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payment_id = await add_payment(user_id, amount, "buy_subscription", description=text)
         await add_subscription(user_id, payment_id, text)
         await update.message.reply_text(
-            f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n*\n🏦 {BANK_CARD}",  # افزودن * بین آدرس و شماره کارت
+            f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\n*\n🏦 {BANK_CARD}",
             reply_markup=get_back_keyboard()
         )
         user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
@@ -440,16 +441,23 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = "📂 اشتراک‌های شما:\n\n"
         now = datetime.now()
         for sub in subscriptions:
-            sub_id, plan, config, status, payment_id, expires_at = sub
+            try:
+                sub_id, plan, config, status, payment_id, expires_at = sub
+            except ValueError:
+                # اگر ستون‌ها ناسازگار باشند، مقدار پیش‌فرض
+                sub_id, plan, config, status, payment_id, expires_at = sub[0], sub[1], sub[2], sub[3], sub[4], None
             # بررسی انقضای اشتراک
             if expires_at and now > expires_at and status == "active":
                 await update_subscription_status(sub_id, "inactive")
                 status = "inactive"
-            time_left = expires_at - now if expires_at and now <= expires_at else timedelta(0)
+            time_left = (expires_at - now) if expires_at and now <= expires_at else timedelta(0)
             days_left = time_left.days
             hours_left = time_left.seconds // 3600
             response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
-            response += f"زمان باقی‌مانده: {days_left} روز و {hours_left} ساعت\n" if status == "active" else ""
+            if expires_at:
+                response += f"زمان باقی‌مانده: {days_left} روز و {hours_left} ساعت\n" if status == "active" else ""
+            else:
+                response += "زمان انقضا: نامشخص\n"
             if config:
                 response += f"کانفیگ:\n```\n{config}\n```\n"
             response += "--------------------\n"
