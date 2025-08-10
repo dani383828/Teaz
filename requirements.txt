@@ -1,7 +1,3 @@
-supabase==2.9.0
-gotrue==2.9.0
-postgrest-py==0.10.6
-httpx==0.23.3
-fastapi==0.115.0
-uvicorn==0.30.6
-python-telegram-bot==21.4
+fastapi==0.95.2
+uvicorn[standard]==0.22.0
+python-telegram-bot==20.8
