@@ -178,6 +178,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     invited_by = context.user_data.get("invited_by")
     ensure_user(user_id, username, invited_by)
 
+    # پاداش دعوت
+    if invited_by:
+        cursor.execute("SELECT user_id FROM users WHERE user_id=?", (invited_by,))
+        if cursor.fetchone():
+            add_balance(invited_by, 25000)
+            try:
+                await context.bot.send_message(
+                    chat_id=invited_by,
+                    text=f"🎉 یک نفر با لینک دعوت شما ثبت‌نام کرد! ۲۵,۰۰۰ تومان به موجودی شما اضافه شد."
+                )
+            except:
+                pass  # در صورت خطا در ارسال پیام، ادامه می‌دهیم
+
     phone = get_user_phone(user_id)
     if phone:
         await update.message.reply_text(
