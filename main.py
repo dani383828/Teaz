@@ -332,7 +332,7 @@ async def get_user_subscriptions(user_id):
             SELECT s.id, s.plan, s.config, s.status, s.payment_id, s.start_date, s.duration_days, u.username
             FROM subscriptions s
             LEFT JOIN users u ON s.user_id = u.user_id
-            WHERE s.user_id = %s AND s.config IS NOT NULL
+            WHERE s.user_id = %s
             ORDER BY s.status DESC, s.start_date DESC
             """,
             (user_id,), fetch=True
@@ -754,56 +754,31 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             
             current_time = datetime.now()
-            total_subs = len(subscriptions)
-            active_subs = sum(1 for sub in subscriptions if sub['status'] == 'active')
+            response = "📂 لیست کامل اشتراک‌های شما:\n\n"
             
-            # ارسال خلاصه وضعیت
-            summary_msg = f"📂 اشتراک‌های شما:\n\n"
-            summary_msg += f"🔹 تعداد کل اشتراک‌ها: {total_subs}\n"
-            summary_msg += f"🔹 اشتراک‌های فعال: {active_subs}\n"
-            summary_msg += f"🔹 اشتراک‌های غیرفعال: {total_subs - active_subs}\n\n"
-            await update.message.reply_text(summary_msg)
-            
-            # ارسال جزئیات هر اشتراک
             for sub in subscriptions:
                 try:
-                    sub_msg = "🔹 اشتراک:\n"
-                    sub_msg += f"📌 پلن: {sub['plan']}\n"
-                    sub_msg += f"🆔 کد خرید: #{sub['payment_id']}\n"
-                    sub_msg += f"📊 وضعیت: {'فعال' if sub['status'] == 'active' else 'غیرفعال'}\n"
+                    response += f"🔹 اشتراک #{sub['id']}\n"
+                    response += f"📌 پلن: {sub['plan']}\n"
+                    response += f"🆔 کد خرید: #{sub['payment_id']}\n"
+                    response += f"📊 وضعیت: {'✅ فعال' if sub['status'] == 'active' else '❌ غیرفعال'}\n"
                     
                     if sub['status'] == "active":
                         remaining_days = max(0, (sub['end_date'] - current_time).days)
-                        sub_msg += f"⏳ زمان باقی‌مانده: {remaining_days} روز\n"
-                        sub_msg += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
+                        response += f"⏳ زمان باقی‌مانده: {remaining_days} روز\n"
+                        response += f"📅 تاریخ شروع: {sub['start_date'].strftime('%Y-%m-%d %H:%M')}\n"
+                        response += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
                     
-                    # ارسال اطلاعات پایه اشتراک
-                    await context.bot.send_message(
-                        chat_id=user_id,
-                        text=sub_msg,
-                        parse_mode="MarkdownV2"
-                    )
-                    
-                    # ارسال کانفیگ در پیام جداگانه اگر وجود داشت
                     if sub['config']:
-                        config_msg = f"🔹 کانفیگ اشتراک #{sub['payment_id']}:\n```\n{sub['config']}\n```"
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=config_msg,
-                            parse_mode="MarkdownV2"
-                        )
+                        response += f"🔐 کانفیگ:\n{sub['config']}\n"
                     
-                    await asyncio.sleep(0.5)  # تأخیر بین ارسال پیام‌ها
+                    response += "------------------------\n\n"
                     
                 except Exception as e:
-                    logging.error(f"Error sending subscription details for user_id {user_id}, sub_id {sub['id']}: {e}")
+                    logging.error(f"Error processing subscription {sub['id']} for user_id {user_id}: {e}")
                     continue
             
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="✅ لیست اشتراک‌های شما به پایان رسید.",
-                reply_markup=get_main_keyboard()
-            )
+            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard())
             
         except Exception as e:
             logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
