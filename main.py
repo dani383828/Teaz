@@ -351,7 +351,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = await get_user_phone(user_id)
     if phone:
         await update.message.reply_text(
-            f"🌐 به فروشگاه VPN ما خوش آمدید!\nشماره تماس شما: {phone}\nیک گزینه را انتخاب کنید:",
+            "🌐 به فروشگاه تیز VPN خوش آمدید!\n\nیک گزینه را انتخاب کنید:",
             reply_markup=get_main_keyboard()
         )
         user_states.pop(user_id, None)
@@ -394,7 +394,7 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     await update.message.reply_text(
-        "🌐 به فروشگاه VPN ما خوش آمدید!\nیک گزینه را انتخاب کنید:",
+        "🌐 به فروشگاه تیز VPN خوش آمدید!\n\nیک گزینه را انتخاب کنید:",
         reply_markup=get_main_keyboard()
     )
     user_states.pop(user_id, None)
@@ -489,9 +489,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             payment_id = await add_payment(user_id, amount, "increase_balance")
             if payment_id:
                 await update.message.reply_text(
-                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n"
-                    f"💎 آدرس TRON (برای واریز ارز دیجیتال):\n{TRON_ADDRESS}\n\n"
-                    f"یا\n\n🏦 شماره کارت بانکی (برای واریز ریالی):\n{BANK_CARD}",
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                    f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\n\n"
+                    f"یا\n\n🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nبحق",
                     reply_markup=get_back_keyboard()
                 )
                 user_states[user_id] = f"awaiting_deposit_receipt_{payment_id}"
@@ -519,9 +519,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if payment_id:
                 await add_subscription(user_id, payment_id, text)
                 await update.message.reply_text(
-                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n"
-                    f"💎 آدرس TRON (برای واریز ارز دیجیتال):\n{TRON_ADDRESS}\n\n"
-                    f"یا\n\n🏦 شماره کارت بانکی (برای واریز ریالی):\n{BANK_CARD}",
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                    f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\n\n"
+                    f"یا\n\n🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nبحق",
                     reply_markup=get_back_keyboard()
                 )
                 user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
@@ -604,7 +604,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
         if update.effective_user.id != ADMIN_ID:
-            await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
+            query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
             return
 
         if data.startswith("approve_"):
