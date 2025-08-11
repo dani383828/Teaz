@@ -194,6 +194,34 @@ def get_connection_guide_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# ---------- تابع کمکی برای ارسال پیام‌های طولانی ----------
+async def send_long_message(chat_id, text, context, reply_markup=None, parse_mode=None):
+    max_message_length = 4000  # حداکثر طول پیام تلگرام (کمی کمتر از 4096 برای ایمنی)
+    if len(text) <= max_message_length:
+        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
+
+    # تقسیم پیام به قطعات
+    messages = []
+    current_message = ""
+    for line in text.split("\n"):
+        if len(current_message) + len(line) + 1 > max_message_length:
+            messages.append(current_message)
+            current_message = line + "\n"
+        else:
+            current_message += line + "\n"
+    if current_message:
+        messages.append(current_message)
+
+    # ارسال پیام‌ها
+    for i, msg in enumerate(messages):
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=msg,
+            reply_markup=reply_markup if i == len(messages) - 1 else None,
+            parse_mode=parse_mode
+        )
+
 # ---------- توابع DB ----------
 async def is_user_member(user_id):
     try:
@@ -338,11 +366,11 @@ async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
             response = f"📂 اشتراک‌های یافت‌شده برای user_id {user_id}:\n\n"
             for row in rows:
                 response += f"رکورد: {row}\n--------------------\n"
-            await update.message.reply_text(response)
-        # Additional debug info
-        table_info = await db_execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'subscriptions'", fetch=True)
-        response += f"\nساختار جدول subscriptions:\n{', '.join(col[0] for col in table_info)}"
-        await update.message.reply_text(response)
+            # اطلاعات ساختار جدول
+            table_info = await db_execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'subscriptions'", fetch=True)
+            response += f"\nساختار جدول subscriptions:\n{', '.join(col[0] for col in table_info)}"
+            # ارسال پیام با تقسیم‌بندی
+            await send_long_message(user_id, response, context)
     except Exception as e:
         logging.error(f"Error in debug_subscriptions for user_id {user_id}: {e}")
         await update.message.reply_text(f"⚠️ خطا در بررسی اشتراک‌ها: {str(e)}")
@@ -353,11 +381,19 @@ user_states = {}
 # ---------- دستورات و هندلرها ----------
 async def set_bot_commands():
     try:
-        commands = [
+        # دستورات برای کاربران عادی (فقط /start)
+        public_commands = [
+            BotCommand(command="/start", description="شروع ربات")
+        ]
+        # دستورات برای ادمین
+        admin_commands = [
             BotCommand(command="/start", description="شروع ربات"),
             BotCommand(command="/debug_subscriptions", description="تشخیص اشتراک‌ها (ادمین)")
         ]
-        await application.bot.set_my_commands(commands)
+        # تنظیم دستورات عمومی برای همه
+        await application.bot.set_my_commands(public_commands)
+        # تنظیم دستورات برای ادمین
+        await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
         logging.info("Bot commands set successfully")
     except Exception as e:
         logging.error(f"Error setting bot commands: {e}")
@@ -693,7 +729,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if config:
                     response += f"کانفیگ:\n```\n{config}\n```\n"
                 response += "--------------------\n"
-            await update.message.reply_text(response, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+            # ارسال پیام با تقسیم‌بندی
+            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="Markdown")
             user_states.pop(user_id, None)
         except Exception as e:
             logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
