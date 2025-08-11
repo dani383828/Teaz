@@ -576,7 +576,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await add_subscription(user_id, payment_id, plan)
                     await update.message.reply_text(
                         f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                        f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\nبحق",
+                        f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
                         reply_markup=get_back_keyboard(),
                         parse_mode="MarkdownV2"
                     )
