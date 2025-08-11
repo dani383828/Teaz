@@ -66,6 +66,9 @@ def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=Fa
         if not query.strip().lower().startswith("select"):
             conn.commit()
         return result
+    except Exception as e:
+        logging.error(f"Database error: {e}")
+        raise
     finally:
         if cur:
             cur.close()
@@ -109,9 +112,12 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 """
 
 async def create_tables():
-    await db_execute(CREATE_USERS_SQL)
-    await db_execute(CREATE_PAYMENTS_SQL)
-    await db_execute(CREATE_SUBSCRIPTIONS_SQL)
+    try:
+        await db_execute(CREATE_USERS_SQL)
+        await db_execute(CREATE_PAYMENTS_SQL)
+        await db_execute(CREATE_SUBSCRIPTIONS_SQL)
+    except Exception as e:
+        logging.error(f"Error creating tables: {e}")
 
 # ---------- کیبوردها ----------
 def get_main_keyboard():
@@ -150,78 +156,115 @@ async def is_user_member(user_id):
         return False
 
 async def ensure_user(user_id, username, invited_by=None):
-    row = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,), fetchone=True)
-    if not row:
-        await db_execute(
-            "INSERT INTO users (user_id, username, invited_by) VALUES (%s, %s, %s)",
-            (user_id, username, invited_by)
-        )
-        if invited_by and invited_by != user_id:
-            inviter = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (invited_by,), fetchone=True)
-            if inviter:
-                await add_balance(invited_by, 25000)
+    try:
+        row = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        if not row:
+            await db_execute(
+                "INSERT INTO users (user_id, username, invited_by) VALUES (%s, %s, %s)",
+                (user_id, username, invited_by)
+            )
+            if invited_by and invited_by != user_id:
+                inviter = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (invited_by,), fetchone=True)
+                if inviter:
+                    await add_balance(invited_by, 25000)
+    except Exception as e:
+        logging.error(f"Error ensuring user: {e}")
 
 async def save_user_phone(user_id, phone):
-    await db_execute("UPDATE users SET phone = %s WHERE user_id = %s", (phone, user_id))
+    try:
+        await db_execute("UPDATE users SET phone = %s WHERE user_id = %s", (phone, user_id))
+    except Exception as e:
+        logging.error(f"Error saving user phone: {e}")
 
 async def get_user_phone(user_id):
-    row = await db_execute("SELECT phone FROM users WHERE user_id = %s", (user_id,), fetchone=True)
-    return row[0] if row else None
+    try:
+        row = await db_execute("SELECT phone FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        return row[0] if row else None
+    except Exception as e:
+        logging.error(f"Error getting user phone: {e}")
+        return None
 
 async def add_balance(user_id, amount):
-    await db_execute("UPDATE users SET balance = COALESCE(balance,0) + %s WHERE user_id = %s", (amount, user_id))
+    try:
+        await db_execute("UPDATE users SET balance = COALESCE(balance,0) + %s WHERE user_id = %s", (amount, user_id))
+    except Exception as e:
+        logging.error(f"Error adding balance: {e}")
 
 async def get_balance(user_id):
-    row = await db_execute("SELECT balance FROM users WHERE user_id = %s", (user_id,), fetchone=True)
-    return int(row[0]) if row and row[0] is not None else 0
+    try:
+        row = await db_execute("SELECT balance FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        return int(row[0]) if row and row[0] is not None else 0
+    except Exception as e:
+        logging.error(f"Error getting balance: {e}")
+        return 0
 
 async def add_payment(user_id, amount, ptype, description=""):
-    query = "INSERT INTO payments (user_id, amount, status, type, description) VALUES (%s, %s, 'pending', %s, %s) RETURNING id"
-    new_id = await db_execute(query, (user_id, amount, ptype, description), returning=True)
-    return int(new_id)
+    try:
+        query = "INSERT INTO payments (user_id, amount, status, type, description) VALUES (%s, %s, 'pending', %s, %s) RETURNING id"
+        new_id = await db_execute(query, (user_id, amount, ptype, description), returning=True)
+        return int(new_id)
+    except Exception as e:
+        logging.error(f"Error adding payment: {e}")
+        return None
 
 async def add_subscription(user_id, payment_id, plan):
-    duration_mapping = {
-        "۱ ماهه: ۹۰ هزار تومان": 30,
-        "۳ ماهه: ۲۵۰ هزار تومان": 90,
-        "۶ ماهه: ۴۵۰ هزار تومان": 180
-    }
-    duration_days = duration_mapping.get(plan, 30)
-    await db_execute(
-        "INSERT INTO subscriptions (user_id, payment_id, plan, status, duration_days) VALUES (%s, %s, %s, 'active', %s)",
-        (user_id, payment_id, plan, duration_days)
-    )
+    try:
+        duration_mapping = {
+            "۱ ماهه: ۹۰ هزار تومان": 30,
+            "۳ ماهه: ۲۵۰ هزار تومان": 90,
+            "۶ ماهه: ۴۵۰ هزار تومان": 180
+        }
+        duration_days = duration_mapping.get(plan, 30)
+        await db_execute(
+            "INSERT INTO subscriptions (user_id, payment_id, plan, status, duration_days) VALUES (%s, %s, %s, 'active', %s)",
+            (user_id, payment_id, plan, duration_days)
+        )
+    except Exception as e:
+        logging.error(f"Error adding subscription: {e}")
 
 async def update_subscription_config(payment_id, config):
-    await db_execute("UPDATE subscriptions SET config = %s WHERE payment_id = %s", (config, payment_id))
+    try:
+        await db_execute("UPDATE subscriptions SET config = %s WHERE payment_id = %s", (config, payment_id))
+    except Exception as e:
+        logging.error(f"Error updating subscription config: {e}")
 
 async def update_payment_status(payment_id, status):
-    await db_execute("UPDATE payments SET status = %s WHERE id = %s", (status, payment_id))
+    try:
+        await db_execute("UPDATE payments SET status = %s WHERE id = %s", (status, payment_id))
+    except Exception as e:
+        logging.error(f"Error updating payment status: {e}")
 
 async def get_user_subscriptions(user_id):
-    rows = await db_execute(
-        "SELECT id, plan, config, status, payment_id, start_date, duration_days FROM subscriptions WHERE user_id = %s",
-        (user_id,), fetch=True
-    )
-    current_time = datetime.now()
-    updated_rows = []
-    for row in rows:
-        sub_id, plan, config, status, payment_id, start_date, duration_days = row
-        if status == "active":
-            end_date = start_date + timedelta(days=duration_days)
-            if current_time > end_date:
-                await db_execute("UPDATE subscriptions SET status = 'inactive' WHERE id = %s", (sub_id,))
-                status = "inactive"
-        updated_rows.append((sub_id, plan, config, status, payment_id, start_date, duration_days))
-    return updated_rows
+    try:
+        rows = await db_execute(
+            "SELECT id, plan, config, status, payment_id, start_date, duration_days FROM subscriptions WHERE user_id = %s",
+            (user_id,), fetch=True
+        )
+        current_time = datetime.now()
+        updated_rows = []
+        for row in rows:
+            sub_id, plan, config, status, payment_id, start_date, duration_days = row
+            if status == "active":
+                end_date = start_date + timedelta(days=duration_days)
+                if current_time > end_date:
+                    await db_execute("UPDATE subscriptions SET status = 'inactive' WHERE id = %s", (sub_id,))
+                    status = "inactive"
+            updated_rows.append((sub_id, plan, config, status, payment_id, start_date, duration_days))
+        return updated_rows
+    except Exception as e:
+        logging.error(f"Error getting user subscriptions: {e}")
+        return []
 
 # ---------- وضعیت کاربر در مموری ----------
 user_states = {}
 
 # ---------- دستورات و هندلرها ----------
 async def set_bot_commands():
-    commands = [BotCommand(command="/start", description="شروع ربات")]
-    await application.bot.set_my_commands(commands)
+    try:
+        commands = [BotCommand(command="/start", description="شروع ربات")]
+        await application.bot.set_my_commands(commands)
+    except Exception as e:
+        logging.error(f"Error setting bot commands: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -294,13 +337,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
-    # ====== بررسی بازگشت به منو در حالت‌های انتظار فیش ======
+    # ====== بررسی بازگشت به منو در همه حالت‌ها ======
     if text == "بازگشت به منو":
-        state = user_states.get(user_id)
-        if state and (state.startswith("awaiting_deposit_receipt_") or state.startswith("awaiting_subscription_receipt_")):
-            await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
-            user_states.pop(user_id, None)
-            return
+        await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
+        user_states.pop(user_id, None)
+        return
 
     # ====== بررسی فیش پرداخت یا کانفیگ ارسالی توسط ادمین ======
     if update.message.photo or update.message.document or update.message.text:
@@ -359,13 +400,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.")
                     return
 
+    # ====== مدیریت گزینه‌های منو ======
     if text == "💰 موجودی":
         await update.message.reply_text("💰 بخش موجودی:\nیک گزینه را انتخاب کنید:", reply_markup=get_balance_keyboard())
+        user_states.pop(user_id, None)  # پاک‌سازی وضعیت برای جلوگیری از تداخل
         return
 
     if text == "نمایش موجودی":
         bal = await get_balance(user_id)
         await update.message.reply_text(f"💰 موجودی شما: {bal} تومان", reply_markup=get_balance_keyboard())
+        user_states.pop(user_id, None)
         return
 
     if text == "افزایش موجودی":
@@ -377,17 +421,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text.isdigit():
             amount = int(text)
             payment_id = await add_payment(user_id, amount, "increase_balance")
-            await update.message.reply_text(
-                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
-                reply_markup=get_back_keyboard()
-            )
-            user_states[user_id] = f"awaiting_deposit_receipt_{payment_id}"
+            if payment_id:
+                await update.message.reply_text(
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
+                    reply_markup=get_back_keyboard()
+                )
+                user_states[user_id] = f"awaiting_deposit_receipt_{payment_id}"
+            else:
+                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
         else:
-            await update.message.reply_text("⚠️ لطفا عدد وارد کنید.")
+            await update.message.reply_text("⚠️ لطفا عدد وارد کنید.", reply_markup=get_back_keyboard())
         return
 
     if text == "💳 خرید اشتراک":
         await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard())
+        user_states.pop(user_id, None)
         return
 
     if text in ["۱ ماهه: ۹۰ هزار تومان", "۳ ماهه: ۲۵۰ هزار تومان", "۶ ماهه: ۴۵۰ هزار تومان"]:
@@ -398,20 +447,26 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         amount = mapping[text]
         payment_id = await add_payment(user_id, amount, "buy_subscription", description=text)
-        await add_subscription(user_id, payment_id, text)
-        await update.message.reply_text(
-            f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
-            reply_markup=get_back_keyboard()
-        )
-        user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+        if payment_id:
+            await add_subscription(user_id, payment_id, text)
+            await update.message.reply_text(
+                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
+                reply_markup=get_back_keyboard()
+            )
+            user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+        else:
+            await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
         return
 
     if text == "🎁 اشتراک تست رایگان":
         await update.message.reply_text("🎁 اشتراک تست رایگان بزودی فعال می‌شود.", reply_markup=get_main_keyboard())
+        user_states.pop(user_id, None)
         return
 
     if text == "📞 پشتیبانی":
         await update.message.reply_text("📞 پشتیبانی: https://t.me/teazadmin", reply_markup=get_main_keyboard())
+        user_states.pop(user_id, None)
         return
 
     if text == "💵 اعتبار رایگان":
@@ -426,35 +481,45 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ),
                     reply_markup=get_main_keyboard()
                 )
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error sending invite image: {e}")
             await update.message.reply_text(
                 f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\nبرای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
                 reply_markup=get_main_keyboard()
             )
+        user_states.pop(user_id, None)
         return
 
     if text == "📂 اشتراک‌های من":
-        subscriptions = await get_user_subscriptions(user_id)
-        if not subscriptions:
-            await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
-            return
-        response = "📂 اشتراک‌های شما:\n\n"
-        current_time = datetime.now()
-        for sub in subscriptions:
-            sub_id, plan, config, status, payment_id, start_date, duration_days = sub
-            end_date = start_date + timedelta(days=duration_days)
-            remaining_days = (end_date - current_time).days if status == "active" else 0
-            remaining_days = max(0, remaining_days)
-            response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
-            if status == "active":
-                response += f"زمان باقی‌مانده: {remaining_days} روز\n"
-            if config:
-                response += f"کانفیگ:\n```\n{config}\n```\n"
-            response += "--------------------\n"
-        await update.message.reply_text(response, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        try:
+            subscriptions = await get_user_subscriptions(user_id)
+            if not subscriptions:
+                await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+                return
+            response = "📂 اشتراک‌های شما:\n\n"
+            current_time = datetime.now()
+            for sub in subscriptions:
+                sub_id, plan, config, status, payment_id, start_date, duration_days = sub
+                end_date = start_date + timedelta(days=duration_days)
+                remaining_days = (end_date - current_time).days if status == "active" else 0
+                remaining_days = max(0, remaining_days)
+                response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
+                if status == "active":
+                    response += f"زمان باقی‌مانده: {remaining_days} روز\n"
+                if config:
+                    response += f"کانفیگ:\n```\n{config}\n```\n"
+                response += "--------------------\n"
+            await update.message.reply_text(response, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+            user_states.pop(user_id, None)
+        except Exception as e:
+            logging.error(f"Error displaying subscriptions: {e}")
+            await update.message.reply_text("⚠️ خطا در نمایش اشتراک‌ها. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
         return
 
     await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
+    user_states.pop(user_id, None)
 
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -543,7 +608,7 @@ async def on_startup():
     try:
         await application.bot.set_webhook(url=WEBHOOK_URL)
     except Exception as e:
-        logging.exception("Error setting webhook: %s", e)
+        logging.error(f"Error setting webhook: {e}")
     await set_bot_commands()
     await application.initialize()
     await application.start()
