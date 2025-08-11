@@ -749,8 +749,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             subscriptions = await get_user_subscriptions(user_id)
             if not subscriptions:
-                count = await db_execute("SELECT COUNT(*) FROM subscriptions WHERE user_id = %s AND config IS NOT NULL", (user_id,), fetchone=True)
-                logging.info(f"Subscription count for user_id {user_id}: {count[0] if count else 0}")
                 await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
                 user_states.pop(user_id, None)
                 return
@@ -764,10 +762,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             summary_msg += f"🔹 تعداد کل اشتراک‌ها: {total_subs}\n"
             summary_msg += f"🔹 اشتراک‌های فعال: {active_subs}\n"
             summary_msg += f"🔹 اشتراک‌های غیرفعال: {total_subs - active_subs}\n\n"
-            summary_msg += "در حال ارسال جزئیات اشتراک‌ها..."
             await update.message.reply_text(summary_msg)
             
-            # ارسال هر اشتراک در یک پیام جداگانه
+            # ارسال جزئیات هر اشتراک
             for sub in subscriptions:
                 try:
                     sub_msg = "🔹 اشتراک:\n"
@@ -780,35 +777,23 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         sub_msg += f"⏳ زمان باقی‌مانده: {remaining_days} روز\n"
                         sub_msg += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
                     
+                    # ارسال اطلاعات پایه اشتراک
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=sub_msg,
+                        parse_mode="MarkdownV2"
+                    )
+                    
+                    # ارسال کانفیگ در پیام جداگانه اگر وجود داشت
                     if sub['config']:
-                        config_part = f"کانفیگ:\n```\n{sub['config']}\n```"
-                        
-                        # اگر پیام طولانی شد، کانفیگ را در پیام جداگانه ارسال کنیم
-                        if len(sub_msg + config_part) > 4000:
-                            await context.bot.send_message(
-                                chat_id=user_id,
-                                text=sub_msg,
-                                parse_mode="MarkdownV2"
-                            )
-                            await context.bot.send_message(
-                                chat_id=user_id,
-                                text=config_part,
-                                parse_mode="MarkdownV2"
-                            )
-                        else:
-                            await context.bot.send_message(
-                                chat_id=user_id,
-                                text=sub_msg + "\n" + config_part,
-                                parse_mode="MarkdownV2"
-                            )
-                    else:
+                        config_msg = f"🔹 کانفیگ اشتراک #{sub['payment_id']}:\n```\n{sub['config']}\n```"
                         await context.bot.send_message(
                             chat_id=user_id,
-                            text=sub_msg,
+                            text=config_msg,
                             parse_mode="MarkdownV2"
                         )
                     
-                    await asyncio.sleep(0.5)  # تأخیر بین ارسال پیام‌ها برای جلوگیری از محدودیت تلگرام
+                    await asyncio.sleep(0.5)  # تأخیر بین ارسال پیام‌ها
                     
                 except Exception as e:
                     logging.error(f"Error sending subscription details for user_id {user_id}, sub_id {sub['id']}: {e}")
