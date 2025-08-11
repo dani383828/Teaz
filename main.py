@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
@@ -114,7 +115,9 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     payment_id INTEGER,
     plan TEXT,
     config TEXT,
-    status TEXT DEFAULT 'active'
+    status TEXT DEFAULT 'active',
+    start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    duration_days INTEGER
 )
 """
 
@@ -221,11 +224,17 @@ async def add_payment(user_id, amount, ptype, description=""):
 
 async def add_subscription(user_id, payment_id, plan):
     try:
+        duration_mapping = {
+            "۱ ماهه: ۹۰ هزار تومان": 30,
+            "۳ ماهه: ۲۵۰ هزار تومان": 90,
+            "۶ ماهه: ۴۵۰ هزار تومان": 180
+        }
+        duration_days = duration_mapping.get(plan, 30)
         await db_execute(
-            "INSERT INTO subscriptions (user_id, payment_id, plan, status) VALUES (%s, %s, %s, 'active')",
-            (user_id, payment_id, plan)
+            "INSERT INTO subscriptions (user_id, payment_id, plan, status, start_date, duration_days) VALUES (%s, %s, %s, 'active', CURRENT_TIMESTAMP, %s)",
+            (user_id, payment_id, plan, duration_days)
         )
-        logging.info(f"Subscription added for user_id {user_id}, payment_id: {payment_id}, plan: {plan}")
+        logging.info(f"Subscription added for user_id {user_id}, payment_id: {payment_id}, plan: {plan}, duration: {duration_days} days")
     except Exception as e:
         logging.error(f"Error adding subscription: {e}")
 
@@ -246,11 +255,26 @@ async def update_payment_status(payment_id, status):
 async def get_user_subscriptions(user_id):
     try:
         rows = await db_execute(
-            "SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id = %s",
+            """
+            SELECT id, plan, config, status, payment_id,
+                   COALESCE(start_date, CURRENT_TIMESTAMP) AS start_date,
+                   COALESCE(duration_days, 30) AS duration_days
+            FROM subscriptions WHERE user_id = %s
+            """,
             (user_id,), fetch=True
         )
         logging.info(f"Fetched {len(rows)} subscriptions for user_id {user_id}: {rows}")
-        return [(row[0], row[1], row[2], row[3], row[4]) for row in rows]
+        current_time = datetime.now()
+        updated_rows = []
+        for row in rows:
+            sub_id, plan, config, status, payment_id, start_date, duration_days = row
+            if status == "active":
+                end_date = start_date + timedelta(days=duration_days)
+                if current_time > end_date:
+                    await db_execute("UPDATE subscriptions SET status = 'inactive' WHERE id = %s", (sub_id,))
+                    status = "inactive"
+            updated_rows.append((sub_id, plan, config, status, payment_id, start_date, duration_days))
+        return updated_rows
     except Exception as e:
         logging.error(f"Error getting user subscriptions: {e}")
         return []
@@ -523,9 +547,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_states.pop(user_id, None)
                 return
             response = "📂 اشتراک‌های شما:\n\n"
+            current_time = datetime.now()
             for sub in subscriptions:
-                sub_id, plan, config, status, payment_id = sub
+                sub_id, plan, config, status, payment_id, start_date, duration_days = sub
+                end_date = start_date + timedelta(days=duration_days)
+                remaining_days = max(0, (end_date - current_time).days) if status == "active" else 0
                 response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
+                if status == "active":
+                    response += f"زمان باقی‌مانده: {remaining_days} روز\n"
                 if config:
                     response += f"کانفیگ:\n```\n{config}\n```\n"
                 response += "--------------------\n"
