@@ -492,7 +492,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
                     f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\n\n"
                     f"یا\n\n🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nبحق",
-                    reply_markup=get_back_keyboard()
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="MarkdownV2"
                 )
                 user_states[user_id] = f"awaiting_deposit_receipt_{payment_id}"
             else:
@@ -522,7 +523,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
                     f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\n\n"
                     f"یا\n\n🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nبحق",
-                    reply_markup=get_back_keyboard()
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="MarkdownV2"
                 )
                 user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
             else:
@@ -604,7 +606,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
         if update.effective_user.id != ADMIN_ID:
-            query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
+            await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
             return
 
         if data.startswith("approve_"):
