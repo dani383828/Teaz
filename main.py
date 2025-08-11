@@ -41,13 +41,19 @@ def init_db_pool():
     global db_pool
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL environment variable is not set.")
-    db_pool = psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
+    try:
+        db_pool = psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
+        logging.info("Database pool initialized successfully")
+    except Exception as e:
+        logging.error(f"Failed to initialize database pool: {e}")
+        raise
 
 def close_db_pool():
     global db_pool
     if db_pool:
         db_pool.closeall()
         db_pool = None
+        logging.info("Database pool closed")
 
 def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=False):
     conn = None
@@ -76,7 +82,11 @@ def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=Fa
             db_pool.putconn(conn)
 
 async def db_execute(query, params=(), fetch=False, fetchone=False, returning=False):
-    return await asyncio.to_thread(_db_execute_sync, query, params, fetch, fetchone, returning)
+    try:
+        return await asyncio.to_thread(_db_execute_sync, query, params, fetch, fetchone, returning)
+    except Exception as e:
+        logging.error(f"Async database error: {e}")
+        raise
 
 # ---------- ساخت جداول (Postgres) ----------
 CREATE_USERS_SQL = """
@@ -116,6 +126,7 @@ async def create_tables():
         await db_execute(CREATE_USERS_SQL)
         await db_execute(CREATE_PAYMENTS_SQL)
         await db_execute(CREATE_SUBSCRIPTIONS_SQL)
+        logging.info("Database tables created successfully")
     except Exception as e:
         logging.error(f"Error creating tables: {e}")
 
@@ -167,12 +178,14 @@ async def ensure_user(user_id, username, invited_by=None):
                 inviter = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (invited_by,), fetchone=True)
                 if inviter:
                     await add_balance(invited_by, 25000)
+        logging.info(f"User {user_id} ensured in database")
     except Exception as e:
         logging.error(f"Error ensuring user: {e}")
 
 async def save_user_phone(user_id, phone):
     try:
         await db_execute("UPDATE users SET phone = %s WHERE user_id = %s", (phone, user_id))
+        logging.info(f"Phone saved for user_id {user_id}")
     except Exception as e:
         logging.error(f"Error saving user phone: {e}")
 
@@ -187,6 +200,7 @@ async def get_user_phone(user_id):
 async def add_balance(user_id, amount):
     try:
         await db_execute("UPDATE users SET balance = COALESCE(balance,0) + %s WHERE user_id = %s", (amount, user_id))
+        logging.info(f"Added {amount} to balance for user_id {user_id}")
     except Exception as e:
         logging.error(f"Error adding balance: {e}")
 
@@ -202,6 +216,7 @@ async def add_payment(user_id, amount, ptype, description=""):
     try:
         query = "INSERT INTO payments (user_id, amount, status, type, description) VALUES (%s, %s, 'pending', %s, %s) RETURNING id"
         new_id = await db_execute(query, (user_id, amount, ptype, description), returning=True)
+        logging.info(f"Payment added for user_id {user_id}, amount: {amount}, type: {ptype}, id: {new_id}")
         return int(new_id)
     except Exception as e:
         logging.error(f"Error adding payment: {e}")
@@ -216,27 +231,29 @@ async def add_subscription(user_id, payment_id, plan):
         }
         duration_days = duration_mapping.get(plan, 30)
         await db_execute(
-            "INSERT INTO subscriptions (user_id, payment_id, plan, status, duration_days) VALUES (%s, %s, %s, 'active', %s)",
+            "INSERT INTO subscriptions (user_id, payment_id, plan, status, duration_days, start_date) VALUES (%s, %s, %s, 'active', %s, CURRENT_TIMESTAMP)",
             (user_id, payment_id, plan, duration_days)
         )
+        logging.info(f"Subscription added for user_id {user_id}, payment_id: {payment_id}, plan: {plan}")
     except Exception as e:
         logging.error(f"Error adding subscription: {e}")
 
 async def update_subscription_config(payment_id, config):
     try:
         await db_execute("UPDATE subscriptions SET config = %s WHERE payment_id = %s", (config, payment_id))
+        logging.info(f"Subscription config updated for payment_id {payment_id}")
     except Exception as e:
         logging.error(f"Error updating subscription config: {e}")
 
 async def update_payment_status(payment_id, status):
     try:
         await db_execute("UPDATE payments SET status = %s WHERE id = %s", (status, payment_id))
+        logging.info(f"Payment status updated to {status} for payment_id {payment_id}")
     except Exception as e:
         logging.error(f"Error updating payment status: {e}")
 
 async def get_user_subscriptions(user_id):
     try:
-        # کوئری سازگار با داده‌های قدیمی و جدید
         rows = await db_execute(
             """
             SELECT id, plan, config, status, payment_id,
@@ -246,7 +263,7 @@ async def get_user_subscriptions(user_id):
             """,
             (user_id,), fetch=True
         )
-        logging.info(f"Fetched {len(rows)} subscriptions for user_id {user_id}")
+        logging.info(f"Fetched {len(rows)} subscriptions for user_id {user_id}: {rows}")
         current_time = datetime.now()
         updated_rows = []
         for row in rows:
@@ -262,14 +279,37 @@ async def get_user_subscriptions(user_id):
         logging.error(f"Error getting user subscriptions: {e}")
         return []
 
+# ---------- دستور تشخیصی برای ادمین ----------
+async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    user_id = update.effective_user.id
+    try:
+        rows = await db_execute("SELECT * FROM subscriptions WHERE user_id = %s", (user_id,), fetch=True)
+        if not rows:
+            await update.message.reply_text(f"📂 هیچ اشتراکی برای user_id {user_id} یافت نشد.")
+        else:
+            response = f"📂 اشتراک‌های یافت‌شده برای user_id {user_id}:\n\n"
+            for row in rows:
+                response += f"رکورد: {row}\n--------------------\n"
+            await update.message.reply_text(response)
+    except Exception as e:
+        logging.error(f"Error in debug_subscriptions: {e}")
+        await update.message.reply_text(f"⚠️ خطا در بررسی اشتراک‌ها: {str(e)}")
+
 # ---------- وضعیت کاربر در مموری ----------
 user_states = {}
 
 # ---------- دستورات و هندلرها ----------
 async def set_bot_commands():
     try:
-        commands = [BotCommand(command="/start", description="شروع ربات")]
+        commands = [
+            BotCommand(command="/start", description="شروع ربات"),
+            BotCommand(command="/debug_subscriptions", description="تشخیص اشتراک‌ها (ادمین)")
+        ]
         await application.bot.set_my_commands(commands)
+        logging.info("Bot commands set successfully")
     except Exception as e:
         logging.error(f"Error setting bot commands: {e}")
 
@@ -585,19 +625,9 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
             user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
 
-async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if args and len(args) > 0:
-        try:
-            invited_by = int(args[0])
-            if invited_by != update.effective_user.id:
-                context.user_data["invited_by"] = invited_by
-        except:
-            context.user_data["invited_by"] = None
-    await start(update, context)
-
 # ---------- ثبت هندلرها ----------
-application.add_handler(CommandHandler("start", start_with_param))
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
@@ -617,6 +647,7 @@ async def on_startup():
     await create_tables()
     try:
         await application.bot.set_webhook(url=WEBHOOK_URL)
+        logging.info("Webhook set successfully")
     except Exception as e:
         logging.error(f"Error setting webhook: {e}")
     await set_bot_commands()
