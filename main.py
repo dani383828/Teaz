@@ -64,7 +64,7 @@ def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=Fa
         cur.execute(query, params)
         result = None
         if returning:
-            result = cur.fetchone()[0]
+            result = cur.fetchone()[0] if cur.rowcount > 0 else None
         elif fetchone:
             result = cur.fetchone()
         elif fetch:
@@ -73,7 +73,7 @@ def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=Fa
             conn.commit()
         return result
     except Exception as e:
-        logging.error(f"Database error: {e}")
+        logging.error(f"Database error in query '{query}': {e}")
         raise
     finally:
         if cur:
@@ -85,7 +85,7 @@ async def db_execute(query, params=(), fetch=False, fetchone=False, returning=Fa
     try:
         return await asyncio.to_thread(_db_execute_sync, query, params, fetch, fetchone, returning)
     except Exception as e:
-        logging.error(f"Async database error: {e}")
+        logging.error(f"Async database error in query '{query}': {e}")
         raise
 
 # ---------- ساخت جداول (Postgres) ----------
@@ -180,21 +180,21 @@ async def ensure_user(user_id, username, invited_by=None):
                     await add_balance(invited_by, 25000)
         logging.info(f"User {user_id} ensured in database")
     except Exception as e:
-        logging.error(f"Error ensuring user: {e}")
+        logging.error(f"Error ensuring user {user_id}: {e}")
 
 async def save_user_phone(user_id, phone):
     try:
         await db_execute("UPDATE users SET phone = %s WHERE user_id = %s", (phone, user_id))
         logging.info(f"Phone saved for user_id {user_id}")
     except Exception as e:
-        logging.error(f"Error saving user phone: {e}")
+        logging.error(f"Error saving user phone for user_id {user_id}: {e}")
 
 async def get_user_phone(user_id):
     try:
         row = await db_execute("SELECT phone FROM users WHERE user_id = %s", (user_id,), fetchone=True)
         return row[0] if row else None
     except Exception as e:
-        logging.error(f"Error getting user phone: {e}")
+        logging.error(f"Error getting user phone for user_id {user_id}: {e}")
         return None
 
 async def add_balance(user_id, amount):
@@ -202,14 +202,14 @@ async def add_balance(user_id, amount):
         await db_execute("UPDATE users SET balance = COALESCE(balance,0) + %s WHERE user_id = %s", (amount, user_id))
         logging.info(f"Added {amount} to balance for user_id {user_id}")
     except Exception as e:
-        logging.error(f"Error adding balance: {e}")
+        logging.error(f"Error adding balance for user_id {user_id}: {e}")
 
 async def get_balance(user_id):
     try:
         row = await db_execute("SELECT balance FROM users WHERE user_id = %s", (user_id,), fetchone=True)
         return int(row[0]) if row and row[0] is not None else 0
     except Exception as e:
-        logging.error(f"Error getting balance: {e}")
+        logging.error(f"Error getting balance for user_id {user_id}: {e}")
         return 0
 
 async def add_payment(user_id, amount, ptype, description=""):
@@ -217,9 +217,9 @@ async def add_payment(user_id, amount, ptype, description=""):
         query = "INSERT INTO payments (user_id, amount, status, type, description) VALUES (%s, %s, 'pending', %s, %s) RETURNING id"
         new_id = await db_execute(query, (user_id, amount, ptype, description), returning=True)
         logging.info(f"Payment added for user_id {user_id}, amount: {amount}, type: {ptype}, id: {new_id}")
-        return int(new_id)
+        return int(new_id) if new_id is not None else None
     except Exception as e:
-        logging.error(f"Error adding payment: {e}")
+        logging.error(f"Error adding payment for user_id {user_id}: {e}")
         return None
 
 async def add_subscription(user_id, payment_id, plan):
@@ -236,29 +236,27 @@ async def add_subscription(user_id, payment_id, plan):
         )
         logging.info(f"Subscription added for user_id {user_id}, payment_id: {payment_id}, plan: {plan}, duration: {duration_days} days")
     except Exception as e:
-        logging.error(f"Error adding subscription: {e}")
+        logging.error(f"Error adding subscription for user_id {user_id}, payment_id: {payment_id}: {e}")
 
 async def update_subscription_config(payment_id, config):
     try:
         await db_execute("UPDATE subscriptions SET config = %s WHERE payment_id = %s", (config, payment_id))
         logging.info(f"Subscription config updated for payment_id {payment_id}")
     except Exception as e:
-        logging.error(f"Error updating subscription config: {e}")
+        logging.error(f"Error updating subscription config for payment_id {payment_id}: {e}")
 
 async def update_payment_status(payment_id, status):
     try:
         await db_execute("UPDATE payments SET status = %s WHERE id = %s", (status, payment_id))
         logging.info(f"Payment status updated to {status} for payment_id {payment_id}")
     except Exception as e:
-        logging.error(f"Error updating payment status: {e}")
+        logging.error(f"Error updating payment status for payment_id {payment_id}: {e}")
 
 async def get_user_subscriptions(user_id):
     try:
         rows = await db_execute(
             """
-            SELECT id, plan, config, status, payment_id,
-                   COALESCE(start_date, CURRENT_TIMESTAMP) AS start_date,
-                   COALESCE(duration_days, 30) AS duration_days
+            SELECT id, plan, config, status, payment_id, start_date, duration_days
             FROM subscriptions WHERE user_id = %s
             """,
             (user_id,), fetch=True
@@ -268,6 +266,9 @@ async def get_user_subscriptions(user_id):
         updated_rows = []
         for row in rows:
             sub_id, plan, config, status, payment_id, start_date, duration_days = row
+            # Handle NULL values for older data
+            start_date = start_date if start_date else datetime.now()
+            duration_days = duration_days if duration_days else 30
             if status == "active":
                 end_date = start_date + timedelta(days=duration_days)
                 if current_time > end_date:
@@ -276,7 +277,7 @@ async def get_user_subscriptions(user_id):
             updated_rows.append((sub_id, plan, config, status, payment_id, start_date, duration_days))
         return updated_rows
     except Exception as e:
-        logging.error(f"Error getting user subscriptions: {e}")
+        logging.error(f"Error getting user subscriptions for user_id {user_id}: {e}")
         return []
 
 # ---------- دستور تشخیصی برای ادمین ----------
@@ -295,7 +296,7 @@ async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 response += f"رکورد: {row}\n--------------------\n"
             await update.message.reply_text(response)
     except Exception as e:
-        logging.error(f"Error in debug_subscriptions: {e}")
+        logging.error(f"Error in debug_subscriptions for user_id {user_id}: {e}")
         await update.message.reply_text(f"⚠️ خطا در بررسی اشتراک‌ها: {str(e)}")
 
 # ---------- وضعیت کاربر در مموری ----------
@@ -561,7 +562,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(response, reply_markup=get_main_keyboard(), parse_mode="Markdown")
             user_states.pop(user_id, None)
         except Exception as e:
-            logging.error(f"Error displaying subscriptions: {e}")
+            logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
             await update.message.reply_text("⚠️ خطا در نمایش اشتراک‌ها. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
         return
