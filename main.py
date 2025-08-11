@@ -236,10 +236,17 @@ async def update_payment_status(payment_id, status):
 
 async def get_user_subscriptions(user_id):
     try:
+        # کوئری سازگار با داده‌های قدیمی و جدید
         rows = await db_execute(
-            "SELECT id, plan, config, status, payment_id, start_date, duration_days FROM subscriptions WHERE user_id = %s",
+            """
+            SELECT id, plan, config, status, payment_id,
+                   COALESCE(start_date, CURRENT_TIMESTAMP) AS start_date,
+                   COALESCE(duration_days, 30) AS duration_days
+            FROM subscriptions WHERE user_id = %s
+            """,
             (user_id,), fetch=True
         )
+        logging.info(f"Fetched {len(rows)} subscriptions for user_id {user_id}")
         current_time = datetime.now()
         updated_rows = []
         for row in rows:
@@ -403,7 +410,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ====== مدیریت گزینه‌های منو ======
     if text == "💰 موجودی":
         await update.message.reply_text("💰 بخش موجودی:\nیک گزینه را انتخاب کنید:", reply_markup=get_balance_keyboard())
-        user_states.pop(user_id, None)  # پاک‌سازی وضعیت برای جلوگیری از تداخل
+        user_states.pop(user_id, None)
         return
 
     if text == "نمایش موجودی":
@@ -494,6 +501,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             subscriptions = await get_user_subscriptions(user_id)
             if not subscriptions:
+                # بررسی وجود داده‌ها در جدول برای اشکال‌زدایی
+                count = await db_execute("SELECT COUNT(*) FROM subscriptions WHERE user_id = %s", (user_id,), fetchone=True)
+                logging.info(f"Subscription count for user_id {user_id}: {count[0] if count else 0}")
                 await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
                 user_states.pop(user_id, None)
                 return
