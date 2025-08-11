@@ -128,6 +128,9 @@ UPDATE subscriptions SET start_date = COALESCE(start_date, CURRENT_TIMESTAMP),
                             WHEN plan = '🥉۱ ماهه | ۹۰ هزار تومان | نامحدود' THEN 30
                             WHEN plan = '🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود' THEN 90
                             WHEN plan = '🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود' THEN 180
+                            WHEN plan = '۱ ماهه: ۹۰ هزار تومان' THEN 30
+                            WHEN plan = '۳ ماهه: ۲۵۰ هزار تومان' THEN 90
+                            WHEN plan = '۶ ماهه: ۴۵۰ هزار تومان' THEN 180
                             ELSE 30
                         END
 WHERE start_date IS NULL OR duration_days IS NULL;
@@ -526,20 +529,26 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text in ["🥉۱ ماهه | ۹۰ هزار تومان | نامحدود", "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود", "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود"]:
         mapping = {
-            "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود": 90000,
-            "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود": 250000,
-            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": 450000
+            "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود": (90000, 0),
+            "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود": (250000, 1),
+            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": (450000, 2)
         }
-        amount = mapping[text]
-        user_states[user_id] = f"awaiting_payment_method_{amount}_{text}"
+        amount, plan_index = mapping[text]
+        user_states[user_id] = f"awaiting_payment_method_{amount}_{plan_index}"
         await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
         return
 
     if user_states.get(user_id, "").startswith("awaiting_payment_method_"):
         try:
-            _, _, amount, plan = user_states[user_id].split("_")
+            _, _, amount, plan_index = user_states[user_id].split("_")
             amount = int(amount)
-            plan = "_".join(user_states[user_id].split("_")[3:])  # Reconstruct plan with underscores
+            plan_index = int(plan_index)
+            plan_mapping = [
+                "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود",
+                "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود",
+                "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود"
+            ]
+            plan = plan_mapping[plan_index]
         except:
             await update.message.reply_text("⚠️ خطا در پردازش. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
