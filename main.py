@@ -125,9 +125,9 @@ ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS start_date TIMESTAMP;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS duration_days INTEGER;
 UPDATE subscriptions SET start_date = COALESCE(start_date, CURRENT_TIMESTAMP),
                         duration_days = CASE
-                            WHEN plan = '۱ ماهه: ۹۰ هزار تومان' THEN 30
-                            WHEN plan = '۳ ماهه: ۲۵۰ هزار تومان' THEN 90
-                            WHEN plan = '۶ ماهه: ۴۵۰ هزار تومان' THEN 180
+                            WHEN plan = '🥉۱ ماهه | ۹۰ هزار تومان | نامحدود' THEN 30
+                            WHEN plan = '🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود' THEN 90
+                            WHEN plan = '🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود' THEN 180
                             ELSE 30
                         END
 WHERE start_date IS NULL OR duration_days IS NULL;
@@ -164,9 +164,18 @@ def get_back_keyboard():
 
 def get_subscription_keyboard():
     keyboard = [
-        [KeyboardButton("۱ ماهه: ۹۰ هزار تومان")],
-        [KeyboardButton("۳ ماهه: ۲۵۰ هزار تومان")],
-        [KeyboardButton("۶ ماهه: ۴۵۰ هزار تومان")],
+        [KeyboardButton("🥉۱ ماهه | ۹۰ هزار تومان | نامحدود")],
+        [KeyboardButton("🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود")],
+        [KeyboardButton("🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود")],
+        [KeyboardButton("بازگشت به منو")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_payment_method_keyboard():
+    keyboard = [
+        [KeyboardButton("کارت به کارت")],
+        [KeyboardButton("پرداخت با ترون")],
+        [KeyboardButton("پرداخت با موجودی")],
         [KeyboardButton("بازگشت به منو")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -217,6 +226,13 @@ async def add_balance(user_id, amount):
     except Exception as e:
         logging.error(f"Error adding balance for user_id {user_id}: {e}")
 
+async def deduct_balance(user_id, amount):
+    try:
+        await db_execute("UPDATE users SET balance = COALESCE(balance,0) - %s WHERE user_id = %s", (amount, user_id))
+        logging.info(f"Deducted {amount} from balance for user_id {user_id}")
+    except Exception as e:
+        logging.error(f"Error deducting balance for user_id {user_id}: {e}")
+
 async def get_balance(user_id):
     try:
         row = await db_execute("SELECT balance FROM users WHERE user_id = %s", (user_id,), fetchone=True)
@@ -238,9 +254,9 @@ async def add_payment(user_id, amount, ptype, description=""):
 async def add_subscription(user_id, payment_id, plan):
     try:
         duration_mapping = {
-            "۱ ماهه: ۹۰ هزار تومان": 30,
-            "۳ ماهه: ۲۵۰ هزار تومان": 90,
-            "۶ ماهه: ۴۵۰ هزار تومان": 180
+            "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود": 30,
+            "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود": 90,
+            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": 180
         }
         duration_days = duration_mapping.get(plan, 30)
         await db_execute(
@@ -271,7 +287,7 @@ async def get_user_subscriptions(user_id):
         rows = await db_execute(
             """
             SELECT id, plan, config, status, payment_id, start_date, duration_days
-            FROM subscriptions WHERE user_id = %s
+            FROM subscriptions WHERE user_id = %s AND config IS NOT NULL
             """,
             (user_id,), fetch=True
         )
@@ -479,7 +495,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "افزایش موجودی":
-        await update.message.reply_text("💳 لطفا مبلغ واریزی را وارد کنید:", reply_markup=get_back_keyboard())
+        await update.message.reply_text("💳 لطفا مبلغ واریزی را به تومان وارد کنید (مثال: 90000):", reply_markup=get_back_keyboard())
         user_states[user_id] = "awaiting_deposit_amount"
         return
 
@@ -508,21 +524,34 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states.pop(user_id, None)
         return
 
-    if text in ["۱ ماهه: ۹۰ هزار تومان", "۳ ماهه: ۲۵۰ هزار تومان", "۶ ماهه: ۴۵۰ هزار تومان"]:
+    if text in ["🥉۱ ماهه | ۹۰ هزار تومان | نامحدود", "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود", "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود"]:
         mapping = {
-            "۱ ماهه: ۹۰ هزار تومان": 90000,
-            "۳ ماهه: ۲۵۰ هزار تومان": 250000,
-            "۶ ماهه: ۴۵۰ هزار تومان": 450000
+            "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود": 90000,
+            "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود": 250000,
+            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": 450000
         }
         amount = mapping[text]
+        user_states[user_id] = f"awaiting_payment_method_{amount}_{text}"
+        await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
+        return
+
+    if user_states.get(user_id, "").startswith("awaiting_payment_method_"):
         try:
-            payment_id = await add_payment(user_id, amount, "buy_subscription", description=text)
+            _, _, amount, plan = user_states[user_id].split("_")
+            amount = int(amount)
+            plan = "_".join(user_states[user_id].split("_")[3:])  # Reconstruct plan with underscores
+        except:
+            await update.message.reply_text("⚠️ خطا در پردازش. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
+            return
+
+        if text == "کارت به کارت":
+            payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
             if payment_id:
-                await add_subscription(user_id, payment_id, text)
+                await add_subscription(user_id, payment_id, plan)
                 await update.message.reply_text(
                     f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                    f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\n\n"
-                    f"یا\n\n🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nبحق",
+                    f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nبحق",
                     reply_markup=get_back_keyboard(),
                     parse_mode="MarkdownV2"
                 )
@@ -530,11 +559,59 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
                 user_states.pop(user_id, None)
-        except Exception as e:
-            logging.error(f"Error processing subscription purchase for user_id {user_id}: {e}")
-            await update.message.reply_text("⚠️ خطا در ثبت اشتراک. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-            user_states.pop(user_id, None)
-        return
+            return
+
+        if text == "پرداخت با ترون":
+            payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
+            if payment_id:
+                await add_subscription(user_id, payment_id, plan)
+                await update.message.reply_text(
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                    f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\nبحق",
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="MarkdownV2"
+                )
+                user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+            else:
+                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+            return
+
+        if text == "پرداخت با موجودی":
+            balance = await get_balance(user_id)
+            if balance >= amount:
+                payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
+                if payment_id:
+                    await add_subscription(user_id, payment_id, plan)
+                    await deduct_balance(user_id, amount)
+                    await update_payment_status(payment_id, "approved")
+                    await update.message.reply_text(
+                        "✅ خرید شما با موفقیت انجام شد. حداکثر تا ۱ ساعت دیگر کانفیگ برای شما ارسال خواهد شد.",
+                        reply_markup=get_main_keyboard()
+                    )
+                    await context.bot.send_message(
+                        chat_id=ADMIN_ID,
+                        text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود سرویس {plan} خریداری کرد."
+                    )
+                    config_keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
+                    ])
+                    await context.bot.send_message(
+                        chat_id=ADMIN_ID,
+                        text=f"✅ پرداخت برای اشتراک ({plan}) تایید شد.",
+                        reply_markup=config_keyboard
+                    )
+                    user_states.pop(user_id, None)
+                else:
+                    await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                    user_states.pop(user_id, None)
+            else:
+                await update.message.reply_text(
+                    f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+            return
 
     if text == "🎁 اشتراک تست رایگان":
         await update.message.reply_text("🎁 اشتراک تست رایگان بزودی فعال می‌شود.", reply_markup=get_main_keyboard())
@@ -571,7 +648,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             subscriptions = await get_user_subscriptions(user_id)
             if not subscriptions:
-                count = await db_execute("SELECT COUNT(*) FROM subscriptions WHERE user_id = %s", (user_id,), fetchone=True)
+                count = await db_execute("SELECT COUNT(*) FROM subscriptions WHERE user_id = %s AND config IS NOT NULL", (user_id,), fetchone=True)
                 logging.info(f"Subscription count for user_id {user_id}: {count[0] if count else 0}")
                 await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
                 user_states.pop(user_id, None)
