@@ -176,10 +176,10 @@ def get_subscription_keyboard():
 
 def get_payment_method_keyboard():
     keyboard = [
-        [KeyboardButton("کارت به کارت")],
-        [KeyboardButton("پرداخت با ترون")],
-        [KeyboardButton("پرداخت با موجودی")],
-        [KeyboardButton("بازگشت به منو")]
+        [KeyboardButton("🏦 کارت به کارت")],
+        [KeyboardButton("💎 پرداخت با ترون")],
+        [KeyboardButton("💰 پرداخت با موجودی")],
+        [KeyboardButton("⬅️ بازگشت به منو")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -423,7 +423,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text if update.message.text else ""
 
     # ====== بررسی بازگشت به منو در همه حالت‌ها ======
-    if text == "بازگشت به منو":
+    if text == "بازگشت به منو" or text == "⬅️ بازگشت به منو":
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
         return
@@ -540,21 +540,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_states.get(user_id, "").startswith("awaiting_payment_method_"):
         try:
-            _, _, amount, plan_index = user_states[user_id].split("_")
-            amount = int(amount)
-            plan_index = int(plan_index)
+            parts = user_states[user_id].split("_")
+            amount = int(parts[2])
+            plan_index = int(parts[3])
             plan_mapping = [
-                "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود",
-                "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود",
-                "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود"
+                ("🥉۱ ماهه | ۹۰ هزار تومان | نامحدود", 30),
+                ("🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود", 90),
+                ("🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود", 180)
             ]
-            plan = plan_mapping[plan_index]
-        except:
+            plan, duration_days = plan_mapping[plan_index]
+        except Exception as e:
+            logging.error(f"Error parsing user state for user_id {user_id}: {e}")
             await update.message.reply_text("⚠️ خطا در پردازش. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
             return
 
-        if text == "کارت به کارت":
+        if text == "🏦 کارت به کارت":
             payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
             if payment_id:
                 await add_subscription(user_id, payment_id, plan)
@@ -570,7 +571,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_states.pop(user_id, None)
             return
 
-        if text == "پرداخت با ترون":
+        if text == "💎 پرداخت با ترون":
             payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
             if payment_id:
                 await add_subscription(user_id, payment_id, plan)
@@ -586,7 +587,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_states.pop(user_id, None)
             return
 
-        if text == "پرداخت با موجودی":
+        if text == "💰 پرداخت با موجودی":
             balance = await get_balance(user_id)
             if balance >= amount:
                 payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
