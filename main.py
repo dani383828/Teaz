@@ -326,11 +326,12 @@ async def update_payment_status(payment_id, status):
 
 async def get_user_subscriptions(user_id):
     try:
+        # Fetch subscriptions with username from users table
         rows = await db_execute(
             """
             SELECT s.id, s.plan, s.config, s.status, s.payment_id, s.start_date, s.duration_days, u.username
             FROM subscriptions s
-            JOIN users u ON s.user_id = u.user_id
+            LEFT JOIN users u ON s.user_id = u.user_id
             WHERE s.user_id = %s AND s.config IS NOT NULL
             """,
             (user_id,), fetch=True
@@ -339,11 +340,12 @@ async def get_user_subscriptions(user_id):
         current_time = datetime.now()
         updated_rows = []
         for row in rows:
-            sub_id, plan, config, status, payment_id, start_date, duration_days, username = row
             try:
-                # Handle NULL values for older data
-                start_date = start_date if start_date else datetime.now()
-                duration_days = duration_days if duration_days else 30
+                sub_id, plan, config, status, payment_id, start_date, duration_days, username = row
+                # Handle NULL values
+                start_date = start_date or current_time
+                duration_days = duration_days or 30
+                username = username or str(user_id)  # Fallback to user_id if username is NULL
                 if status == "active":
                     end_date = start_date + timedelta(days=duration_days)
                     if current_time > end_date:
@@ -356,7 +358,7 @@ async def get_user_subscriptions(user_id):
         logging.info(f"Processed {len(updated_rows)} subscriptions for user_id {user_id}")
         return updated_rows
     except Exception as e:
-        logging.error(f"Error getting user subscriptions for user_id {user_id}: {e}")
+        logging.error(f"Error in get_user_subscriptions for user_id {user_id}: {e}")
         return []
 
 # ---------- دستور تشخیصی برای ادمین ----------
@@ -744,11 +746,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response = "📂 اشتراک‌های شما:\n\n"
             current_time = datetime.now()
             for sub in subscriptions:
-                sub_id, plan, config, status, payment_id, start_date, duration_days, username = sub
                 try:
+                    sub_id, plan, config, status, payment_id, start_date, duration_days, username = sub
+                    username_display = f"@{username}" if username != str(user_id) else f"@{user_id}"
                     end_date = start_date + timedelta(days=duration_days)
                     remaining_days = max(0, (end_date - current_time).days) if status == "active" else 0
-                    response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
+                    response += f"🔹 اشتراک: {plan}\n"
+                    response += f"کد خرید: #{payment_id}\n"
+                    response += f"وضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
                     if status == "active":
                         response += f"زمان باقی‌مانده: {remaining_days} روز\n"
                     if config:
@@ -758,7 +763,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logging.error(f"Error processing subscription {sub_id} for user_id {user_id} in message_handler: {e}")
                     continue
             logging.info(f"Sending subscriptions response for user_id {user_id}, length: {len(response)}")
-            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="MarkdownV2")
             user_states.pop(user_id, None)
         except Exception as e:
             logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
@@ -820,7 +825,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
         if update.effective_user.id != ADMIN_ID:
-            query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
+            await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
             return
 
         if data.startswith("approve_"):
