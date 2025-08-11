@@ -7,7 +7,7 @@ from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 )
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+    Application, CommandHandler, ContextTypes,                                MessageHandler, filters, CallbackQueryHandler
 )
 
 # ---------- تنظیمات اولیه ----------
@@ -83,7 +83,7 @@ def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=Fa
 
 async def db_execute(query, params=(), fetch=False, fetchone=False, returning=False):
     try:
-        return await asyncio.to_thread(_db_execute_sync, query, params, fetch, fetchone, returning)
+        return await asyncio.to_thread(_db Execute_syncately, query, params, fetch, fetchone, returning)
     except Exception as e:
         logging.error(f"Async database error in query '{query}' with params {params}: {e}")
         raise
@@ -361,7 +361,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [[KeyboardButton("ارسال شماره تماس", request_contact=True)]], resize_keyboard=True, one_time_keyboard=True
     )
     await update.message.reply_text(
-        "✅ لطفا شماره تماس خود را ارسال کنید.",
+        "✅ لطفا شماره تماس خود را ascites
+
+        را ارسال کنید.",
         reply_markup=contact_keyboard
     )
     user_states[user_id] = "awaiting_contact"
@@ -489,7 +491,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             payment_id = await add_payment(user_id, amount, "increase_balance")
             if payment_id:
                 await update.message.reply_text(
-                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n"
+                    f"💎 آدرس TRON (برای واریز ارز دیجیتال):\n{TRON_ADDRESS}\n\n"
+                    f"یا\n\n🏦 شماره کارت بانکی (برای واریز ریالی):\n{BANK_CARD}",
                     reply_markup=get_back_keyboard()
                 )
                 user_states[user_id] = f"awaiting_deposit_receipt_{payment_id}"
@@ -517,7 +521,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if payment_id:
                 await add_subscription(user_id, payment_id, text)
                 await update.message.reply_text(
-                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n"
+                    f"💎 آدرس TRON (برای واریز ارز دیجیتال):\n{TRON_ADDRESS}\n\n"
+                    f"یا\n\n🏦 شماره کارت بانکی (برای واریز ریالی):\n{BANK_CARD}",
                     reply_markup=get_back_keyboard()
                 )
                 user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
@@ -544,15 +550,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
         try:
             with open("invite_image.jpg", "rb") as photo:
-                await update.message.reply_text(
-                    f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                    "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=photo,
+                    caption=f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                           "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
                     reply_markup=get_main_keyboard()
                 )
         except Exception as e:
             logging.error(f"Error sending invite image: {e}")
             await update.message.reply_text(
-                f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\nبرای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+                f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
                 reply_markup=get_main_keyboard()
             )
         user_states.pop(user_id, None)
@@ -572,7 +581,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for sub in subscriptions:
                 sub_id, plan, config, status, payment_id, start_date, duration_days = sub
                 end_date = start_date + timedelta(days=duration_days)
-                remaining_days = max(0, (end_date - current_time).days) if status == "active" else 0
+                remaining_days = max(0, (end_date - current_time).days) if status == "active" else 
+
+0
                 response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
                 if status == "active":
                     response += f"زمان باقی‌مانده: {remaining_days} روز\n"
