@@ -328,25 +328,32 @@ async def get_user_subscriptions(user_id):
     try:
         rows = await db_execute(
             """
-            SELECT id, plan, config, status, payment_id, start_date, duration_days
-            FROM subscriptions WHERE user_id = %s AND config IS NOT NULL
+            SELECT s.id, s.plan, s.config, s.status, s.payment_id, s.start_date, s.duration_days, u.username
+            FROM subscriptions s
+            JOIN users u ON s.user_id = u.user_id
+            WHERE s.user_id = %s AND s.config IS NOT NULL
             """,
             (user_id,), fetch=True
         )
-        logging.info(f"Fetched {len(rows)} subscriptions for user_id {user_id}: {rows}")
+        logging.info(f"Fetched {len(rows)} subscriptions for user_id {user_id}")
         current_time = datetime.now()
         updated_rows = []
         for row in rows:
-            sub_id, plan, config, status, payment_id, start_date, duration_days = row
-            # Handle NULL values for older data
-            start_date = start_date if start_date else datetime.now()
-            duration_days = duration_days if duration_days else 30
-            if status == "active":
-                end_date = start_date + timedelta(days=duration_days)
-                if current_time > end_date:
-                    await db_execute("UPDATE subscriptions SET status = 'inactive' WHERE id = %s", (sub_id,))
-                    status = "inactive"
-            updated_rows.append((sub_id, plan, config, status, payment_id, start_date, duration_days))
+            sub_id, plan, config, status, payment_id, start_date, duration_days, username = row
+            try:
+                # Handle NULL values for older data
+                start_date = start_date if start_date else datetime.now()
+                duration_days = duration_days if duration_days else 30
+                if status == "active":
+                    end_date = start_date + timedelta(days=duration_days)
+                    if current_time > end_date:
+                        await db_execute("UPDATE subscriptions SET status = 'inactive' WHERE id = %s", (sub_id,))
+                        status = "inactive"
+                updated_rows.append((sub_id, plan, config, status, payment_id, start_date, duration_days, username))
+            except Exception as e:
+                logging.error(f"Error processing subscription {sub_id} for user_id {user_id}: {e}")
+                continue
+        logging.info(f"Processed {len(updated_rows)} subscriptions for user_id {user_id}")
         return updated_rows
     except Exception as e:
         logging.error(f"Error getting user subscriptions for user_id {user_id}: {e}")
@@ -359,17 +366,34 @@ async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     user_id = update.effective_user.id
     try:
-        rows = await db_execute("SELECT * FROM subscriptions WHERE user_id = %s", (user_id,), fetch=True)
+        rows = await db_execute(
+            """
+            SELECT s.user_id, u.username, s.plan, s.payment_id, s.start_date, s.duration_days, s.status
+            FROM subscriptions s
+            JOIN users u ON s.user_id = u.user_id
+            WHERE s.user_id = %s
+            """,
+            (user_id,), fetch=True
+        )
         if not rows:
             await update.message.reply_text(f"📂 هیچ اشتراکی برای user_id {user_id} یافت نشد.")
         else:
             response = f"📂 اشتراک‌های یافت‌شده برای user_id {user_id}:\n\n"
+            current_time = datetime.now()
             for row in rows:
-                response += f"رکورد: {row}\n--------------------\n"
-            # اطلاعات ساختار جدول
-            table_info = await db_execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'subscriptions'", fetch=True)
-            response += f"\nساختار جدول subscriptions:\n{', '.join(col[0] for col in table_info)}"
-            # ارسال پیام با تقسیم‌بندی
+                user_id, username, plan, payment_id, start_date, duration_days, status = row
+                username_display = f"@{username}" if username else f"@{user_id}"
+                start_date = start_date if start_date else datetime.now()
+                duration_days = duration_days if duration_days else 30
+                remaining_days = 0
+                if status == "active":
+                    end_date = start_date + timedelta(days=duration_days)
+                    remaining_days = max(0, (end_date - current_time).days)
+                response += f"کاربر: {username_display}\n"
+                response += f"اشتراک: {plan}\n"
+                response += f"کد خرید: #{payment_id}\n"
+                response += f"زمان باقی‌مانده: {remaining_days} روز\n"
+                response += "--------------------\n"
             await send_long_message(user_id, response, context)
     except Exception as e:
         logging.error(f"Error in debug_subscriptions for user_id {user_id}: {e}")
@@ -720,16 +744,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response = "📂 اشتراک‌های شما:\n\n"
             current_time = datetime.now()
             for sub in subscriptions:
-                sub_id, plan, config, status, payment_id, start_date, duration_days = sub
-                end_date = start_date + timedelta(days=duration_days)
-                remaining_days = max(0, (end_date - current_time).days) if status == "active" else 0
-                response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
-                if status == "active":
-                    response += f"زمان باقی‌مانده: {remaining_days} روز\n"
-                if config:
-                    response += f"کانفیگ:\n```\n{config}\n```\n"
-                response += "--------------------\n"
-            # ارسال پیام با تقسیم‌بندی
+                sub_id, plan, config, status, payment_id, start_date, duration_days, username = sub
+                try:
+                    end_date = start_date + timedelta(days=duration_days)
+                    remaining_days = max(0, (end_date - current_time).days) if status == "active" else 0
+                    response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
+                    if status == "active":
+                        response += f"زمان باقی‌مانده: {remaining_days} روز\n"
+                    if config:
+                        response += f"کانفیگ:\n```\n{config}\n```\n"
+                    response += "--------------------\n"
+                except Exception as e:
+                    logging.error(f"Error processing subscription {sub_id} for user_id {user_id} in message_handler: {e}")
+                    continue
+            logging.info(f"Sending subscriptions response for user_id {user_id}, length: {len(response)}")
             await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="Markdown")
             user_states.pop(user_id, None)
         except Exception as e:
@@ -792,7 +820,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
         if update.effective_user.id != ADMIN_ID:
-            await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
+            query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
             return
 
         if data.startswith("approve_"):
