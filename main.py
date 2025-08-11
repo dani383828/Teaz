@@ -150,8 +150,9 @@ async def create_tables():
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton("💰 موجودی"), KeyboardButton("💳 خرید اشتراک")],
-        [KeyboardButton("🎁 اشتراک تست رایگان"), KeyboardButton("📞 پشتیبانی")],
+        [KeyboardButton("🎁 اشتراک تست رایگان"), KeyboardButton("☎️ پشتیبانی")],
         [KeyboardButton("💵 اعتبار رایگان"), KeyboardButton("📂 اشتراک‌های من")],
+        [KeyboardButton("💡 راهنمای اتصال")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -179,6 +180,16 @@ def get_payment_method_keyboard():
         [KeyboardButton("🏦 کارت به کارت")],
         [KeyboardButton("💎 پرداخت با ترون")],
         [KeyboardButton("💰 پرداخت با موجودی")],
+        [KeyboardButton("⬅️ بازگشت به منو")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_connection_guide_keyboard():
+    keyboard = [
+        [KeyboardButton("📗 اندروید")],
+        [KeyboardButton("📕 آیفون/مک")],
+        [KeyboardButton("📘 ویندوز")],
+        [KeyboardButton("📙 لینوکس")],
         [KeyboardButton("⬅️ بازگشت به منو")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -635,7 +646,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states.pop(user_id, None)
         return
 
-    if text == "📞 پشتیبانی":
+    if text == "☎️ پشتیبانی":
         await update.message.reply_text("📞 پشتیبانی: https://t.me/teazadmin", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
         return
@@ -688,6 +699,50 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
             await update.message.reply_text("⚠️ خطا در نمایش اشتراک‌ها. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
+        return
+
+    if text == "💡 راهنمای اتصال":
+        await update.message.reply_text(
+            "راهنمای راه‌اندازی\nدستگاه خود را انتخاب کنید:",
+            reply_markup=get_connection_guide_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "📗 اندروید":
+        await update.message.reply_text(
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های V2RayNG یا Hiddify(پیشنهادی) است ✅\n"
+            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            reply_markup=get_connection_guide_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "📕 آیفون/مک":
+        await update.message.reply_text(
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های Singbox(پیشنهادی) یا Streisand یا V2box(پیشنهادی) هست ✅\n"
+            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            reply_markup=get_connection_guide_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "📘 ویندوز":
+        await update.message.reply_text(
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن ‌V2rayN هست ✅\n"
+            "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            reply_markup=get_connection_guide_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "📙 لینوکس":
+        await update.message.reply_text(
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن ‌V2rayN هست ✅\n"
+            "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            reply_markup=get_connection_guide_keyboard()
+        )
+        user_states.pop(user_id, None)
         return
 
     await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
