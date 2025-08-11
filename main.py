@@ -333,12 +333,13 @@ async def get_user_subscriptions(user_id):
             FROM subscriptions s
             LEFT JOIN users u ON s.user_id = u.user_id
             WHERE s.user_id = %s AND s.config IS NOT NULL
+            ORDER BY s.status DESC, s.start_date DESC
             """,
             (user_id,), fetch=True
         )
         logging.info(f"Fetched {len(rows)} subscriptions for user_id {user_id}")
         current_time = datetime.now()
-        updated_rows = []
+        subscriptions = []
         for row in rows:
             try:
                 sub_id, plan, config, status, payment_id, start_date, duration_days, username = row
@@ -351,12 +352,22 @@ async def get_user_subscriptions(user_id):
                     if current_time > end_date:
                         await db_execute("UPDATE subscriptions SET status = 'inactive' WHERE id = %s", (sub_id,))
                         status = "inactive"
-                updated_rows.append((sub_id, plan, config, status, payment_id, start_date, duration_days, username))
+                subscriptions.append({
+                    'id': sub_id,
+                    'plan': plan,
+                    'config': config,
+                    'status': status,
+                    'payment_id': payment_id,
+                    'start_date': start_date,
+                    'duration_days': duration_days,
+                    'username': username,
+                    'end_date': start_date + timedelta(days=duration_days)
+                })
             except Exception as e:
                 logging.error(f"Error processing subscription {sub_id} for user_id {user_id}: {e}")
                 continue
-        logging.info(f"Processed {len(updated_rows)} subscriptions for user_id {user_id}")
-        return updated_rows
+        logging.info(f"Processed {len(subscriptions)} subscriptions for user_id {user_id}")
+        return subscriptions
     except Exception as e:
         logging.error(f"Error in get_user_subscriptions for user_id {user_id}: {e}")
         return []
@@ -743,32 +754,77 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
                 user_states.pop(user_id, None)
                 return
-            response = "📂 اشتراک‌های شما:\n\n"
+            
             current_time = datetime.now()
+            total_subs = len(subscriptions)
+            active_subs = sum(1 for sub in subscriptions if sub['status'] == 'active')
+            
+            # ارسال خلاصه وضعیت
+            summary_msg = f"📂 اشتراک‌های شما:\n\n"
+            summary_msg += f"🔹 تعداد کل اشتراک‌ها: {total_subs}\n"
+            summary_msg += f"🔹 اشتراک‌های فعال: {active_subs}\n"
+            summary_msg += f"🔹 اشتراک‌های غیرفعال: {total_subs - active_subs}\n\n"
+            summary_msg += "در حال ارسال جزئیات اشتراک‌ها..."
+            await update.message.reply_text(summary_msg)
+            
+            # ارسال هر اشتراک در یک پیام جداگانه
             for sub in subscriptions:
                 try:
-                    sub_id, plan, config, status, payment_id, start_date, duration_days, username = sub
-                    username_display = f"@{username}" if username != str(user_id) else f"@{user_id}"
-                    end_date = start_date + timedelta(days=duration_days)
-                    remaining_days = max(0, (end_date - current_time).days) if status == "active" else 0
-                    response += f"🔹 اشتراک: {plan}\n"
-                    response += f"کد خرید: #{payment_id}\n"
-                    response += f"وضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
-                    if status == "active":
-                        response += f"زمان باقی‌مانده: {remaining_days} روز\n"
-                    if config:
-                        response += f"کانفیگ:\n```\n{config}\n```\n"
-                    response += "--------------------\n"
+                    sub_msg = "🔹 اشتراک:\n"
+                    sub_msg += f"📌 پلن: {sub['plan']}\n"
+                    sub_msg += f"🆔 کد خرید: #{sub['payment_id']}\n"
+                    sub_msg += f"📊 وضعیت: {'فعال' if sub['status'] == 'active' else 'غیرفعال'}\n"
+                    
+                    if sub['status'] == "active":
+                        remaining_days = max(0, (sub['end_date'] - current_time).days)
+                        sub_msg += f"⏳ زمان باقی‌مانده: {remaining_days} روز\n"
+                        sub_msg += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
+                    
+                    if sub['config']:
+                        config_part = f"کانفیگ:\n```\n{sub['config']}\n```"
+                        
+                        # اگر پیام طولانی شد، کانفیگ را در پیام جداگانه ارسال کنیم
+                        if len(sub_msg + config_part) > 4000:
+                            await context.bot.send_message(
+                                chat_id=user_id,
+                                text=sub_msg,
+                                parse_mode="MarkdownV2"
+                            )
+                            await context.bot.send_message(
+                                chat_id=user_id,
+                                text=config_part,
+                                parse_mode="MarkdownV2"
+                            )
+                        else:
+                            await context.bot.send_message(
+                                chat_id=user_id,
+                                text=sub_msg + "\n" + config_part,
+                                parse_mode="MarkdownV2"
+                            )
+                    else:
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=sub_msg,
+                            parse_mode="MarkdownV2"
+                        )
+                    
+                    await asyncio.sleep(0.5)  # تأخیر بین ارسال پیام‌ها برای جلوگیری از محدودیت تلگرام
+                    
                 except Exception as e:
-                    logging.error(f"Error processing subscription {sub_id} for user_id {user_id} in message_handler: {e}")
+                    logging.error(f"Error sending subscription details for user_id {user_id}, sub_id {sub['id']}: {e}")
                     continue
-            logging.info(f"Sending subscriptions response for user_id {user_id}, length: {len(response)}")
-            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="MarkdownV2")
-            user_states.pop(user_id, None)
+            
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="✅ لیست اشتراک‌های شما به پایان رسید.",
+                reply_markup=get_main_keyboard()
+            )
+            
         except Exception as e:
             logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
             await update.message.reply_text("⚠️ خطا در نمایش اشتراک‌ها. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-            user_states.pop(user_id, None)
+        
+        user_states.pop(user_id, None)
         return
 
     if text == "💡 راهنمای اتصال":
