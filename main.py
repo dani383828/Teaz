@@ -73,7 +73,7 @@ def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=Fa
             conn.commit()
         return result
     except Exception as e:
-        logging.error(f"Database error in query '{query}': {e}")
+        logging.error(f"Database error in query '{query}' with params {params}: {e}")
         raise
     finally:
         if cur:
@@ -85,10 +85,10 @@ async def db_execute(query, params=(), fetch=False, fetchone=False, returning=Fa
     try:
         return await asyncio.to_thread(_db_execute_sync, query, params, fetch, fetchone, returning)
     except Exception as e:
-        logging.error(f"Async database error in query '{query}': {e}")
+        logging.error(f"Async database error in query '{query}' with params {params}: {e}")
         raise
 
-# ---------- ساخت جداول (Postgres) ----------
+# ---------- ساخت و مهاجرت جداول ----------
 CREATE_USERS_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY,
@@ -116,9 +116,21 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     plan TEXT,
     config TEXT,
     status TEXT DEFAULT 'active',
-    start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    start_date TIMESTAMP,
     duration_days INTEGER
 )
+"""
+MIGRATE_SUBSCRIPTIONS_SQL = """
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS start_date TIMESTAMP;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS duration_days INTEGER;
+UPDATE subscriptions SET start_date = COALESCE(start_date, CURRENT_TIMESTAMP),
+                        duration_days = CASE
+                            WHEN plan = '۱ ماهه: ۹۰ هزار تومان' THEN 30
+                            WHEN plan = '۳ ماهه: ۲۵۰ هزار تومان' THEN 90
+                            WHEN plan = '۶ ماهه: ۴۵۰ هزار تومان' THEN 180
+                            ELSE 30
+                        END
+WHERE start_date IS NULL OR duration_days IS NULL;
 """
 
 async def create_tables():
@@ -126,9 +138,10 @@ async def create_tables():
         await db_execute(CREATE_USERS_SQL)
         await db_execute(CREATE_PAYMENTS_SQL)
         await db_execute(CREATE_SUBSCRIPTIONS_SQL)
-        logging.info("Database tables created successfully")
+        await db_execute(MIGRATE_SUBSCRIPTIONS_SQL)
+        logging.info("Database tables created and migrated successfully")
     except Exception as e:
-        logging.error(f"Error creating tables: {e}")
+        logging.error(f"Error creating or migrating tables: {e}")
 
 # ---------- کیبوردها ----------
 def get_main_keyboard():
@@ -237,6 +250,7 @@ async def add_subscription(user_id, payment_id, plan):
         logging.info(f"Subscription added for user_id {user_id}, payment_id: {payment_id}, plan: {plan}, duration: {duration_days} days")
     except Exception as e:
         logging.error(f"Error adding subscription for user_id {user_id}, payment_id: {payment_id}: {e}")
+        raise  # Raise to catch in caller
 
 async def update_subscription_config(payment_id, config):
     try:
@@ -295,6 +309,10 @@ async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
             for row in rows:
                 response += f"رکورد: {row}\n--------------------\n"
             await update.message.reply_text(response)
+        # Additional debug info
+        table_info = await db_execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'subscriptions'", fetch=True)
+        response += f"\nساختار جدول subscriptions:\n{', '.join(col[0] for col in table_info)}"
+        await update.message.reply_text(response)
     except Exception as e:
         logging.error(f"Error in debug_subscriptions for user_id {user_id}: {e}")
         await update.message.reply_text(f"⚠️ خطا در بررسی اشتراک‌ها: {str(e)}")
@@ -494,16 +512,21 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "۶ ماهه: ۴۵۰ هزار تومان": 450000
         }
         amount = mapping[text]
-        payment_id = await add_payment(user_id, amount, "buy_subscription", description=text)
-        if payment_id:
-            await add_subscription(user_id, payment_id, text)
-            await update.message.reply_text(
-                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
-                reply_markup=get_back_keyboard()
-            )
-            user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
-        else:
-            await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+        try:
+            payment_id = await add_payment(user_id, amount, "buy_subscription", description=text)
+            if payment_id:
+                await add_subscription(user_id, payment_id, text)
+                await update.message.reply_text(
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n💎 {TRON_ADDRESS}\nیا\n🏦 {BANK_CARD}",
+                    reply_markup=get_back_keyboard()
+                )
+                user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+            else:
+                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+        except Exception as e:
+            logging.error(f"Error processing subscription purchase for user_id {user_id}: {e}")
+            await update.message.reply_text("⚠️ خطا در ثبت اشتراک. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
         return
 
@@ -521,12 +544,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
         try:
             with open("invite_image.jpg", "rb") as photo:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=(
-                        f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                        "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد."
-                    ),
+                await update.message.reply_text(
+                    f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                    "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
                     reply_markup=get_main_keyboard()
                 )
         except Exception as e:
