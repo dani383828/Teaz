@@ -1,7 +1,6 @@
 import os
 import logging
 import asyncio
-from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
@@ -115,9 +114,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     payment_id INTEGER,
     plan TEXT,
     config TEXT,
-    status TEXT DEFAULT 'active',
-    start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    duration_days INTEGER
+    status TEXT DEFAULT 'active'
 )
 """
 
@@ -224,15 +221,9 @@ async def add_payment(user_id, amount, ptype, description=""):
 
 async def add_subscription(user_id, payment_id, plan):
     try:
-        duration_mapping = {
-            "۱ ماهه: ۹۰ هزار تومان": 30,
-            "۳ ماهه: ۲۵۰ هزار تومان": 90,
-            "۶ ماهه: ۴۵۰ هزار تومان": 180
-        }
-        duration_days = duration_mapping.get(plan, 30)
         await db_execute(
-            "INSERT INTO subscriptions (user_id, payment_id, plan, status, duration_days, start_date) VALUES (%s, %s, %s, 'active', %s, CURRENT_TIMESTAMP)",
-            (user_id, payment_id, plan, duration_days)
+            "INSERT INTO subscriptions (user_id, payment_id, plan, status) VALUES (%s, %s, %s, 'active')",
+            (user_id, payment_id, plan)
         )
         logging.info(f"Subscription added for user_id {user_id}, payment_id: {payment_id}, plan: {plan}")
     except Exception as e:
@@ -255,26 +246,11 @@ async def update_payment_status(payment_id, status):
 async def get_user_subscriptions(user_id):
     try:
         rows = await db_execute(
-            """
-            SELECT id, plan, config, status, payment_id,
-                   COALESCE(start_date, CURRENT_TIMESTAMP) AS start_date,
-                   COALESCE(duration_days, 30) AS duration_days
-            FROM subscriptions WHERE user_id = %s
-            """,
+            "SELECT id, plan, config, status, payment_id FROM subscriptions WHERE user_id = %s",
             (user_id,), fetch=True
         )
         logging.info(f"Fetched {len(rows)} subscriptions for user_id {user_id}: {rows}")
-        current_time = datetime.now()
-        updated_rows = []
-        for row in rows:
-            sub_id, plan, config, status, payment_id, start_date, duration_days = row
-            if status == "active":
-                end_date = start_date + timedelta(days=duration_days)
-                if current_time > end_date:
-                    await db_execute("UPDATE subscriptions SET status = 'inactive' WHERE id = %s", (sub_id,))
-                    status = "inactive"
-            updated_rows.append((sub_id, plan, config, status, payment_id, start_date, duration_days))
-        return updated_rows
+        return [(row[0], row[1], row[2], row[3], row[4]) for row in rows]
     except Exception as e:
         logging.error(f"Error getting user subscriptions: {e}")
         return []
@@ -541,22 +517,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             subscriptions = await get_user_subscriptions(user_id)
             if not subscriptions:
-                # بررسی وجود داده‌ها در جدول برای اشکال‌زدایی
                 count = await db_execute("SELECT COUNT(*) FROM subscriptions WHERE user_id = %s", (user_id,), fetchone=True)
                 logging.info(f"Subscription count for user_id {user_id}: {count[0] if count else 0}")
                 await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
                 user_states.pop(user_id, None)
                 return
             response = "📂 اشتراک‌های شما:\n\n"
-            current_time = datetime.now()
             for sub in subscriptions:
-                sub_id, plan, config, status, payment_id, start_date, duration_days = sub
-                end_date = start_date + timedelta(days=duration_days)
-                remaining_days = (end_date - current_time).days if status == "active" else 0
-                remaining_days = max(0, remaining_days)
+                sub_id, plan, config, status, payment_id = sub
                 response += f"🔹 اشتراک: {plan}\nکد خرید: #{payment_id}\nوضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
-                if status == "active":
-                    response += f"زمان باقی‌مانده: {remaining_days} روز\n"
                 if config:
                     response += f"کانفیگ:\n```\n{config}\n```\n"
                 response += "--------------------\n"
@@ -625,8 +594,19 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
             user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
 
+async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if args and len(args) > 0:
+        try:
+            invited_by = int(args[0])
+            if invited_by != update.effective_user.id:
+                context.user_data["invited_by"] = invited_by
+        except:
+            context.user_data["invited_by"] = None
+    await start(update, context)
+
 # ---------- ثبت هندلرها ----------
-application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("start", start_with_param))
 application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
