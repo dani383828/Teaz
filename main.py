@@ -538,7 +538,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ خطا در انتخاب پلن. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
             return
-        user_states[user_id] = f"awaiting_payment_method_{amount}_{plan_index}"
+        
+        # Store both amount and plan text in user state
+        user_states[user_id] = f"awaiting_payment_method_{amount}_{text}"
         logging.info(f"Set user state for user_id {user_id}: {user_states[user_id]}")
         await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
         return
@@ -548,93 +550,84 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.info(f"Processing payment method for user_id {user_id}, state: {state}")
         try:
             parts = state.split("_")
-            if len(parts) != 4 or parts[0] != "awaiting" or parts[1] != "payment" or parts[2] != "method":
-                raise ValueError(f"Invalid state format: {state}")
             amount = int(parts[3])
-            plan_index = int(parts[4])
-            plan_mapping = [
-                ("🥉۱ ماهه | ۹۰ هزار تومان | نامحدود", 30),
-                ("🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود", 90),
-                ("🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود", 180)
-            ]
-            if plan_index < 0 or plan_index >= len(plan_mapping):
-                raise ValueError(f"Invalid plan_index: {plan_index}")
-            plan, duration_days = plan_mapping[plan_index]
-        except Exception as e:
-            logging.error(f"Error parsing user state for user_id {user_id}, state: {state}, error: {e}")
-            await update.message.reply_text("⚠️ خطا در پردازش. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-            user_states.pop(user_id, None)
-            return
-
-        if text == "🏦 کارت به کارت":
-            payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
-            if payment_id:
-                await add_subscription(user_id, payment_id, plan)
-                await update.message.reply_text(
-                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                    f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nبحق",
-                    reply_markup=get_back_keyboard(),
-                    parse_mode="MarkdownV2"
-                )
-                user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
-                logging.info(f"Set state to awaiting_subscription_receipt_{payment_id} for user_id {user_id}")
-            else:
-                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-                user_states.pop(user_id, None)
-            return
-
-        if text == "💎 پرداخت با ترون":
-            payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
-            if payment_id:
-                await add_subscription(user_id, payment_id, plan)
-                await update.message.reply_text(
-                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                    f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\nبحق",
-                    reply_markup=get_back_keyboard(),
-                    parse_mode="MarkdownV2"
-                )
-                user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
-                logging.info(f"Set state to awaiting_subscription_receipt_{payment_id} for user_id {user_id}")
-            else:
-                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-                user_states.pop(user_id, None)
-            return
-
-        if text == "💰 پرداخت با موجودی":
-            balance = await get_balance(user_id)
-            if balance >= amount:
+            plan = "_".join(parts[4:])  # Get the full plan text
+            
+            if text == "🏦 کارت به کارت":
                 payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
                 if payment_id:
                     await add_subscription(user_id, payment_id, plan)
-                    await deduct_balance(user_id, amount)
-                    await update_payment_status(payment_id, "approved")
                     await update.message.reply_text(
-                        "✅ خرید شما با موفقیت انجام شد. حداکثر تا ۱ ساعت دیگر کانفیگ برای شما ارسال خواهد شد.",
-                        reply_markup=get_main_keyboard()
+                        f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                        f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nبحق",
+                        reply_markup=get_back_keyboard(),
+                        parse_mode="MarkdownV2"
                     )
-                    await context.bot.send_message(
-                        chat_id=ADMIN_ID,
-                        text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود سرویس {plan} خریداری کرد."
-                    )
-                    config_keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
-                    ])
-                    await context.bot.send_message(
-                        chat_id=ADMIN_ID,
-                        text=f"✅ پرداخت برای اشتراک ({plan}) تایید شد.",
-                        reply_markup=config_keyboard
-                    )
-                    user_states.pop(user_id, None)
-                    logging.info(f"Payment with balance successful for user_id {user_id}, payment_id: {payment_id}")
+                    user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+                    logging.info(f"Set state to awaiting_subscription_receipt_{payment_id} for user_id {user_id}")
                 else:
                     await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
                     user_states.pop(user_id, None)
-            else:
-                await update.message.reply_text(
-                    f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
-                    reply_markup=get_main_keyboard()
-                )
-                user_states.pop(user_id, None)
+                return
+
+            if text == "💎 پرداخت با ترون":
+                payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
+                if payment_id:
+                    await add_subscription(user_id, payment_id, plan)
+                    await update.message.reply_text(
+                        f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                        f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\nبحق",
+                        reply_markup=get_back_keyboard(),
+                        parse_mode="MarkdownV2"
+                    )
+                    user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+                    logging.info(f"Set state to awaiting_subscription_receipt_{payment_id} for user_id {user_id}")
+                else:
+                    await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                    user_states.pop(user_id, None)
+                return
+
+            if text == "💰 پرداخت با موجودی":
+                balance = await get_balance(user_id)
+                if balance >= amount:
+                    payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
+                    if payment_id:
+                        await add_subscription(user_id, payment_id, plan)
+                        await deduct_balance(user_id, amount)
+                        await update_payment_status(payment_id, "approved")
+                        await update.message.reply_text(
+                            "✅ خرید شما با موفقیت انجام شد. حداکثر تا ۱ ساعت دیگر کانفیگ برای شما ارسال خواهد شد.",
+                            reply_markup=get_main_keyboard()
+                        )
+                        await context.bot.send_message(
+                            chat_id=ADMIN_ID,
+                            text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود سرویس {plan} خریداری کرد."
+                        )
+                        config_keyboard = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
+                        ])
+                        await context.bot.send_message(
+                            chat_id=ADMIN_ID,
+                            text=f"✅ پرداخت برای اشتراک ({plan}) تایید شد.",
+                            reply_markup=config_keyboard
+                        )
+                        user_states.pop(user_id, None)
+                        logging.info(f"Payment with balance successful for user_id {user_id}, payment_id: {payment_id}")
+                    else:
+                        await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                        user_states.pop(user_id, None)
+                else:
+                    await update.message.reply_text(
+                        f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
+                        reply_markup=get_main_keyboard()
+                    )
+                    user_states.pop(user_id, None)
+                return
+
+        except Exception as e:
+            logging.error(f"Error processing payment method for user_id {user_id}, state: {state}, error: {e}")
+            await update.message.reply_text("⚠️ خطا در پردازش. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
             return
 
     if text == "🎁 اشتراک تست رایگان":
