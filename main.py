@@ -146,6 +146,22 @@ async def create_tables():
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
 
+# ---------- پاک کردن دیتابیس ----------
+async def clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    try:
+        # Delete all data from tables
+        await db_execute("DELETE FROM subscriptions")
+        await db_execute("DELETE FROM payments")
+        await db_execute("DELETE FROM users")
+        logging.info("Database cleared successfully by admin")
+        await update.message.reply_text("✅ دیتابیس با موفقیت پاک شد.")
+    except Exception as e:
+        logging.error(f"Error clearing database: {e}")
+        await update.message.reply_text(f"⚠️ خطا در پاک کردن دیتابیس: {str(e)}")
+
 # ---------- کیبوردها ----------
 def get_main_keyboard():
     keyboard = [
@@ -308,7 +324,7 @@ async def add_subscription(user_id, payment_id, plan):
         logging.info(f"Subscription added for user_id {user_id}, payment_id: {payment_id}, plan: {plan}, duration: {duration_days} days")
     except Exception as e:
         logging.error(f"Error adding subscription for user_id {user_id}, payment_id: {payment_id}: {e}")
-        raise  # Raise to catch in caller
+        raise
 
 async def update_subscription_config(payment_id, config):
     try:
@@ -326,7 +342,6 @@ async def update_payment_status(payment_id, status):
 
 async def get_user_subscriptions(user_id):
     try:
-        # Fetch subscriptions with username from users table
         rows = await db_execute(
             """
             SELECT s.id, s.plan, s.config, s.status, s.payment_id, s.start_date, s.duration_days, u.username
@@ -343,10 +358,9 @@ async def get_user_subscriptions(user_id):
         for row in rows:
             try:
                 sub_id, plan, config, status, payment_id, start_date, duration_days, username = row
-                # Handle NULL values
                 start_date = start_date or current_time
                 duration_days = duration_days or 30
-                username = username or str(user_id)  # Fallback to user_id if username is NULL
+                username = username or str(user_id)
                 if status == "active":
                     end_date = start_date + timedelta(days=duration_days)
                     if current_time > end_date:
@@ -425,7 +439,8 @@ async def set_bot_commands():
         # دستورات برای ادمین
         admin_commands = [
             BotCommand(command="/start", description="شروع ربات"),
-            BotCommand(command="/debug_subscriptions", description="تشخیص اشتراک‌ها (ادمین)")
+            BotCommand(command="/debug_subscriptions", description="تشخیص اشتراک‌ها (ادمین)"),
+            BotCommand(command="/cleardb", description="پاک کردن دیتابیس (ادمین)")
         ]
         # تنظیم دستورات عمومی برای همه
         await application.bot.set_my_commands(public_commands)
@@ -623,7 +638,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states.pop(user_id, None)
             return
         
-        # Store both amount and plan text in user state
         user_states[user_id] = f"awaiting_payment_method_{amount}_{text}"
         logging.info(f"Set user state for user_id {user_id}: {user_states[user_id]}")
         await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
@@ -635,7 +649,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             parts = state.split("_")
             amount = int(parts[3])
-            plan = "_".join(parts[4:])  # Get the full plan text
+            plan = "_".join(parts[4:])
             
             if text == "🏦 کارت به کارت":
                 payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
@@ -902,6 +916,7 @@ async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- ثبت هندلرها ----------
 application.add_handler(CommandHandler("start", start_with_param))
 application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
+application.add_handler(CommandHandler("cleardb", clear_db))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
