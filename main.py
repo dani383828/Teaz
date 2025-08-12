@@ -150,7 +150,7 @@ async def create_tables():
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
 
-# ---------- دستور آمار ربات (بهبود یافته) ----------
+# ---------- دستور آمار ربات ----------
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
@@ -218,40 +218,35 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fetchone=True
         )
         
-        # ساخت پیام آماری با طراحی زیبا
-        stats_message = "📊 *آمار جامع ربات تیز VPN* 📊\n\n"
-        stats_message += "👥 *آمار کاربران:*\n"
-        stats_message += f"├─ کل کاربران: `{total_users[0] if total_users else 0:,}` 👤\n"
-        stats_message += f"├─ کاربران فعال: `{active_users[0] if active_users else 0:,}` ✅\n"
-        stats_message += f"├─ کاربران غیرفعال: `{inactive_users:,}` ❌\n"
-        stats_message += f"└─ کاربران امروز: `{today_users[0] if today_users else 0:,}` 🆕\n\n"
+        # ساخت پیام آماری
+        stats_message = "🌟 گزارش عملکرد تیز VPN 🚀\n\n"
+        stats_message += "👥 کاربران:\n"
+        stats_message += f"  • کل کاربران: {total_users[0] if total_users else 0:,} نفر 🧑‍💻\n"
+        stats_message += f"  • کاربران فعال: {active_users[0] if active_users else 0:,} نفر ✅\n"
+        stats_message += f"  • کاربران غیرفعال: {inactive_users:,} نفر ❎\n"
+        stats_message += f"  • کاربران جدید امروز: {today_users[0] if today_users else 0:,} نفر 🆕\n"
+        stats_message += f"  • کاربران دعوت‌شده: {invited_users[0] if invited_users else 0:,} نفر 🤝\n\n"
         
-        stats_message += "💰 *آمار مالی:*\n"
-        stats_message += f"├─ درآمد امروز: `{today_income[0] if today_income else 0:,}` تومان 💵\n"
-        stats_message += f"├─ درآمد ماه: `{month_income[0] if month_income else 0:,}` تومان 📅\n"
-        stats_message += f"└─ درآمد کل: `{total_income[0] if total_income else 0:,}` تومان 💰\n\n"
+        stats_message += "💸 درآمد:\n"
+        stats_message += f"  • امروز: {today_income[0] if today_income else 0:,} تومان 💰\n"
+        stats_message += f"  • این ماه: {month_income[0] if month_income else 0:,} تومان 📈\n"
+        stats_message += f"  • کل درآمد: {total_income[0] if total_income else 0:,} تومان 🔥\n\n"
         
-        stats_message += "📦 *آمار اشتراک‌ها:*\n"
-        stats_message += f"├─ اشتراک‌های فعال: `{active_subs[0] if active_subs else 0:,}` ✅\n"
-        stats_message += f"├─ در انتظار تایید: `{pending_subs[0] if pending_subs else 0:,}` ⏳\n"
-        stats_message += f"└─ کل تراکنش‌ها: `{total_transactions[0] if total_transactions else 0:,}` 🔄\n\n"
+        stats_message += "📦 اشتراک‌ها:\n"
+        stats_message += f"  • اشتراک‌های فعال: {active_subs[0] if active_subs else 0:,} عدد 🟢\n"
+        stats_message += f"  • اشتراک‌های در انتظار: {pending_subs[0] if pending_subs else 0:,} عدد ⏳\n"
+        stats_message += f"  • پرفروش‌ترین پلن: {best_selling_plan[0]} ({best_selling_plan[1]:,} عدد) 🏆\n\n"
         
-        stats_message += "🏆 *پرفروش‌ترین پلن:*\n"
-        stats_message += f"└─ `{best_selling_plan[0]}` ({best_selling_plan[1]:,} عدد) 🥇\n\n"
-        
-        stats_message += "💳 *روش‌های پرداخت:*\n"
+        stats_message += "💳 روش‌های پرداخت:\n"
         for method, percent in payment_methods_percent:
-            stats_message += f"├─ {method}: `{percent}%`\n"
-        stats_message += "\n"
+            stats_message += f"  • {method}: {percent}% 💸\n"
+        stats_message += f"  • کل تراکنش‌ها: {total_transactions[0] if total_transactions else 0:,} عدد 🔄\n"
         
-        stats_message += "🤝 *آمار دعوت‌ها:*\n"
-        stats_message += f"└─ کاربران دعوت‌شده: `{invited_users[0] if invited_users else 0:,}` 🎁"
-        
-        await update.message.reply_text(stats_message, parse_mode="Markdown")
+        await update.message.reply_text(stats_message)
         
     except Exception as e:
         logging.error(f"Error generating stats: {e}")
-        await update.message.reply_text("⚠️ خطا در تولید آمار. لطفا دوباره تلاش کنید.")
+        await update.message.reply_text("⚠️ خطایی در نمایش آمار رخ داد. لطفاً دوباره تلاش کنید.")
 
 # ---------- پاک کردن دیتابیس ----------
 async def clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
