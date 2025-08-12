@@ -150,7 +150,7 @@ async def create_tables():
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
 
-# ---------- دستور آمار ربات ----------
+# ---------- دستور آمار ربات (بهبود یافته) ----------
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
@@ -218,25 +218,36 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fetchone=True
         )
         
-        # ساخت پیام آماری
-        stats_message = "📊 آمار ربات تیز VPN:\n\n"
-        stats_message += f"👥 تعداد کل کاربران: {total_users[0] if total_users else 0}\n"
-        stats_message += f"✅ کاربران فعال: {active_users[0] if active_users else 0}\n"
-        stats_message += f"❌ کاربران غیرفعال: {inactive_users}\n"
-        stats_message += f"🆕 کاربران اضافه‌شده امروز: {today_users[0] if today_users else 0}\n"
-        stats_message += f"💰 درآمد امروز: {today_income[0] if today_income else 0:,} تومان\n"
-        stats_message += f"💰 درآمد ماه: {month_income[0] if month_income else 0:,} تومان\n"
-        stats_message += f"🔥 پرفروش‌ترین پلن: {best_selling_plan[0]} ({best_selling_plan[1]} عدد)\n"
-        stats_message += "💳 روش پرداخت:\n"
-        for method, percent in payment_methods_percent:
-            stats_message += f"  - {method}: {percent}%\n"
-        stats_message += f"✅ اشتراک‌های فعال: {active_subs[0] if active_subs else 0}\n"
-        stats_message += f"💳 تعداد کل تراکنش‌ها: {total_transactions[0] if total_transactions else 0}\n"
-        stats_message += f"💰 درآمد کل: {total_income[0] if total_income else 0:,} تومان\n"
-        stats_message += f"🤝 کاربران دعوت‌شده: {invited_users[0] if invited_users else 0}\n"
-        stats_message += f"⏳ اشتراک‌های در حال انتظار: {pending_subs[0] if pending_subs else 0}"
+        # ساخت پیام آماری با طراحی زیبا
+        stats_message = "📊 *آمار جامع ربات تیز VPN* 📊\n\n"
+        stats_message += "👥 *آمار کاربران:*\n"
+        stats_message += f"├─ کل کاربران: `{total_users[0] if total_users else 0:,}` 👤\n"
+        stats_message += f"├─ کاربران فعال: `{active_users[0] if active_users else 0:,}` ✅\n"
+        stats_message += f"├─ کاربران غیرفعال: `{inactive_users:,}` ❌\n"
+        stats_message += f"└─ کاربران امروز: `{today_users[0] if today_users else 0:,}` 🆕\n\n"
         
-        await update.message.reply_text(stats_message)
+        stats_message += "💰 *آمار مالی:*\n"
+        stats_message += f"├─ درآمد امروز: `{today_income[0] if today_income else 0:,}` تومان 💵\n"
+        stats_message += f"├─ درآمد ماه: `{month_income[0] if month_income else 0:,}` تومان 📅\n"
+        stats_message += f"└─ درآمد کل: `{total_income[0] if total_income else 0:,}` تومان 💰\n\n"
+        
+        stats_message += "📦 *آمار اشتراک‌ها:*\n"
+        stats_message += f"├─ اشتراک‌های فعال: `{active_subs[0] if active_subs else 0:,}` ✅\n"
+        stats_message += f"├─ در انتظار تایید: `{pending_subs[0] if pending_subs else 0:,}` ⏳\n"
+        stats_message += f"└─ کل تراکنش‌ها: `{total_transactions[0] if total_transactions else 0:,}` 🔄\n\n"
+        
+        stats_message += "🏆 *پرفروش‌ترین پلن:*\n"
+        stats_message += f"└─ `{best_selling_plan[0]}` ({best_selling_plan[1]:,} عدد) 🥇\n\n"
+        
+        stats_message += "💳 *روش‌های پرداخت:*\n"
+        for method, percent in payment_methods_percent:
+            stats_message += f"├─ {method}: `{percent}%`\n"
+        stats_message += "\n"
+        
+        stats_message += "🤝 *آمار دعوت‌ها:*\n"
+        stats_message += f"└─ کاربران دعوت‌شده: `{invited_users[0] if invited_users else 0:,}` 🎁"
+        
+        await update.message.reply_text(stats_message, parse_mode="Markdown")
         
     except Exception as e:
         logging.error(f"Error generating stats: {e}")
