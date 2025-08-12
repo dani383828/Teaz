@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS users (
     balance BIGINT DEFAULT 0,
     invited_by BIGINT,
     phone TEXT,
-    join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """
 CREATE_PAYMENTS_SQL = """
@@ -107,8 +107,7 @@ CREATE TABLE IF NOT EXISTS payments (
     status TEXT,
     type TEXT,
     description TEXT,
-    payment_method TEXT,
-    payment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """
 CREATE_SUBSCRIPTIONS_SQL = """
@@ -126,6 +125,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 MIGRATE_SUBSCRIPTIONS_SQL = """
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS start_date TIMESTAMP;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS duration_days INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 UPDATE subscriptions SET start_date = COALESCE(start_date, CURRENT_TIMESTAMP),
                         duration_days = CASE
                             WHEN plan = '🥉۱ ماهه | ۹۰ هزار تومان | نامحدود' THEN 30
@@ -149,6 +150,98 @@ async def create_tables():
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
 
+# ---------- دستور آمار ربات ----------
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    try:
+        # آمار کاربران
+        total_users = await db_execute("SELECT COUNT(*) FROM users", fetchone=True)
+        active_users = await db_execute("SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active'", fetchone=True)
+        inactive_users = total_users[0] - active_users[0] if total_users and active_users else 0
+        today_users = await db_execute(
+            "SELECT COUNT(*) FROM users WHERE created_at >= CURRENT_DATE", 
+            fetchone=True
+        )
+        
+        # آمار درآمد
+        today_income = await db_execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved' AND created_at >= CURRENT_DATE",
+            fetchone=True
+        )
+        month_income = await db_execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved' AND created_at >= DATE_TRUNC('month', CURRENT_DATE)",
+            fetchone=True
+        )
+        total_income = await db_execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved'",
+            fetchone=True
+        )
+        
+        # آمار پلن‌ها
+        plan_stats = await db_execute(
+            "SELECT plan, COUNT(*) as count FROM subscriptions GROUP BY plan ORDER BY count DESC",
+            fetch=True
+        )
+        best_selling_plan = plan_stats[0] if plan_stats else ("هیچ پلنی", 0)
+        
+        # آمار روش‌های پرداخت
+        payment_methods = await db_execute(
+            "SELECT type, COUNT(*) as count FROM payments WHERE status = 'approved' GROUP BY type",
+            fetch=True
+        )
+        total_payments = sum([pm[1] for pm in payment_methods]) if payment_methods else 1
+        payment_methods_percent = [
+            (pm[0], round((pm[1] / total_payments) * 100, 1)) 
+            for pm in payment_methods
+        ] if payment_methods else []
+        
+        # آمار اشتراک‌ها
+        active_subs = await db_execute(
+            "SELECT COUNT(*) FROM subscriptions WHERE status = 'active'",
+            fetchone=True
+        )
+        pending_subs = await db_execute(
+            "SELECT COUNT(*) FROM payments WHERE status = 'pending' AND type = 'buy_subscription'",
+            fetchone=True
+        )
+        total_transactions = await db_execute(
+            "SELECT COUNT(*) FROM payments",
+            fetchone=True
+        )
+        
+        # آمار دعوت‌ها
+        invited_users = await db_execute(
+            "SELECT COUNT(*) FROM users WHERE invited_by IS NOT NULL",
+            fetchone=True
+        )
+        
+        # ساخت پیام آماری
+        stats_message = "📊 آمار ربات تیز VPN:\n\n"
+        stats_message += f"👥 تعداد کل کاربران: {total_users[0] if total_users else 0}\n"
+        stats_message += f"✅ کاربران فعال: {active_users[0] if active_users else 0}\n"
+        stats_message += f"❌ کاربران غیرفعال: {inactive_users}\n"
+        stats_message += f"🆕 کاربران اضافه‌شده امروز: {today_users[0] if today_users else 0}\n"
+        stats_message += f"💰 درآمد امروز: {today_income[0] if today_income else 0:,} تومان\n"
+        stats_message += f"💰 درآمد ماه: {month_income[0] if month_income else 0:,} تومان\n"
+        stats_message += f"🔥 پرفروش‌ترین پلن: {best_selling_plan[0]} ({best_selling_plan[1]} عدد)\n"
+        stats_message += "💳 روش پرداخت:\n"
+        for method, percent in payment_methods_percent:
+            stats_message += f"  - {method}: {percent}%\n"
+        stats_message += f"✅ اشتراک‌های فعال: {active_subs[0] if active_subs else 0}\n"
+        stats_message += f"💳 تعداد کل تراکنش‌ها: {total_transactions[0] if total_transactions else 0}\n"
+        stats_message += f"💰 درآمد کل: {total_income[0] if total_income else 0:,} تومان\n"
+        stats_message += f"🤝 کاربران دعوت‌شده: {invited_users[0] if invited_users else 0}\n"
+        stats_message += f"⏳ اشتراک‌های در حال انتظار: {pending_subs[0] if pending_subs else 0}"
+        
+        await update.message.reply_text(stats_message)
+        
+    except Exception as e:
+        logging.error(f"Error generating stats: {e}")
+        await update.message.reply_text("⚠️ خطا در تولید آمار. لطفا دوباره تلاش کنید.")
+
 # ---------- پاک کردن دیتابیس ----------
 async def clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -164,139 +257,6 @@ async def clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"Error clearing database: {e}")
         await update.message.reply_text(f"⚠️ خطا در پاک کردن دیتابیس: {str(e)}")
-
-# ---------- آمار برای ادمین ----------
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
-        return
-
-    try:
-        current_time = datetime.now()
-        today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        month_start = current_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-        # تعداد کل کاربران
-        total_users = await db_execute("SELECT COUNT(*) FROM users", fetchone=True)[0] or 0
-
-        # تعداد کاربران فعال (کاربرانی که حداقل یک اشتراک فعال دارند)
-        active_users = await db_execute(
-            """
-            SELECT COUNT(DISTINCT s.user_id)
-            FROM subscriptions s
-            WHERE s.status = 'active'
-            AND s.start_date + INTERVAL '1 day' * s.duration_days > %s
-            """,
-            (current_time,), fetchone=True
-        )[0] or 0
-
-        # تعداد کاربران غیرفعال
-        inactive_users = total_users - active_users
-
-        # کاربران اضافه‌شده امروز
-        users_today = await db_execute(
-            "SELECT COUNT(*) FROM users WHERE join_date >= %s",
-            (today_start,), fetchone=True
-        )[0] or 0
-
-        # درآمد امروز
-        revenue_today = await db_execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved' AND payment_date >= %s",
-            (today_start,), fetchone=True
-        )[0] or 0
-
-        # درآمد ماه
-        revenue_month = await db_execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved' AND payment_date >= %s",
-            (month_start,), fetchone=True
-        )[0] or 0
-
-        # تعداد اشتراک‌های فعال
-        active_subscriptions = await db_execute(
-            """
-            SELECT COUNT(*) FROM subscriptions
-            WHERE status = 'active'
-            AND start_date + INTERVAL '1 day' * duration_days > %s
-            """,
-            (current_time,), fetchone=True
-        )[0] or 0
-
-        # تعداد کل تراکنش‌ها
-        total_payments = await db_execute("SELECT COUNT(*) FROM payments WHERE status = 'approved'", fetchone=True)[0] or 0
-
-        # درآمد کل
-        total_revenue = await db_execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved'",
-            fetchone=True
-        )[0] or 0
-
-        # پرفروش‌ترین پلن
-        top_plan = await db_execute(
-            """
-            SELECT plan, COUNT(*) as count
-            FROM subscriptions
-            WHERE status = 'active'
-            GROUP BY plan
-            ORDER BY count DESC
-            LIMIT 1
-            """,
-            fetchone=True
-        )
-        top_plan_name = top_plan[0] if top_plan else "نامشخص"
-        top_plan_count = top_plan[1] if top_plan else 0
-        top_plan_percentage = (top_plan_count / active_subscriptions * 100) if active_subscriptions > 0 else 0
-
-        # درصد روش‌های پرداخت
-        total_buy_subscriptions = await db_execute(
-            "SELECT COUNT(*) FROM payments WHERE type = 'buy_subscription' AND status = 'approved'",
-            fetchone=True
-        )[0] or 0
-        card_payments = await db_execute(
-            "SELECT COUNT(*) FROM payments WHERE type = 'buy_subscription' AND status = 'approved' AND payment_method = 'card'",
-            fetchone=True
-        )[0] or 0
-        tron_payments = await db_execute(
-            "SELECT COUNT(*) FROM payments WHERE type = 'buy_subscription' AND status = 'approved' AND payment_method = 'tron'",
-            fetchone=True
-        )[0] or 0
-        card_percentage = (card_payments / total_buy_subscriptions * 100) if total_buy_subscriptions > 0 else 0
-        tron_percentage = (tron_payments / total_buy_subscriptions * 100) if total_buy_subscriptions > 0 else 0
-
-        # تعداد کاربران دعوت‌شده
-        invited_users = await db_execute(
-            "SELECT COUNT(*) FROM users WHERE invited_by IS NOT NULL",
-            fetchone=True
-        )[0] or 0
-
-        # تعداد اشتراک‌های در حال انتظار
-        pending_subscriptions = await db_execute(
-            "SELECT COUNT(*) FROM subscriptions WHERE config IS NULL AND status = 'active'",
-            fetchone=True
-        )[0] or 0
-
-        # ساخت پیام آمار
-        response = "📊 آمار ربات تیز VPN:\n\n"
-        response += f"👥 تعداد کل کاربران: {total_users}\n"
-        response += f"✅ کاربران فعال: {active_users}\n"
-        response += f"❌ کاربران غیرفعال: {inactive_users}\n"
-        response += f"🆕 کاربران اضافه‌شده امروز: {users_today}\n"
-        response += f"💰 درآمد امروز: {revenue_today:,} تومان\n"
-        response += f"💰 درآمد ماه: {revenue_month:,} تومان\n"
-        response += f"🔥 پرفروش‌ترین پلن: {top_plan_name} ({top_plan_percentage:.1f}%)\n"
-        response += f"💳 روش پرداخت:\n"
-        response += f"  - کارت: {card_percentage:.1f}%\n"
-        response += f"  - رمزارز (ترون): {tron_percentage:.1f}%\n"
-        response += f"✅ اشتراک‌های فعال: {active_subscriptions}\n"
-        response += f"💳 تعداد کل تراکنش‌ها: {total_payments}\n"
-        response += f"💰 درآمد کل: {total_revenue:,} تومان\n"
-        response += f"🤝 کاربران دعوت‌شده: {invited_users}\n"
-        response += f"⏳ اشتراک‌های در حال انتظار: {pending_subscriptions}\n"
-
-        await update.message.reply_text(response, reply_markup=get_main_keyboard())
-        logging.info(f"Stats displayed for admin (user_id: {update.effective_user.id})")
-    except Exception as e:
-        logging.error(f"Error displaying stats for admin: {e}")
-        await update.message.reply_text(f"⚠️ خطا در نمایش آمار: {str(e)}", reply_markup=get_main_keyboard())
 
 # ---------- کیبوردها ----------
 def get_main_keyboard():
@@ -387,7 +347,7 @@ async def ensure_user(user_id, username, invited_by=None):
         row = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,), fetchone=True)
         if not row:
             await db_execute(
-                "INSERT INTO users (user_id, username, invited_by, join_date) VALUES (%s, %s, %s, CURRENT_TIMESTAMP)",
+                "INSERT INTO users (user_id, username, invited_by) VALUES (%s, %s, %s)",
                 (user_id, username, invited_by)
             )
             if invited_by and invited_by != user_id:
@@ -404,6 +364,7 @@ async def save_user_phone(user_id, phone):
         logging.info(f"Phone saved for user_id {user_id}")
     except Exception as e:
         logging.error(f"Error saving user phone for user_id {user_id}: {e}")
+        return None
 
 async def get_user_phone(user_id):
     try:
@@ -435,10 +396,10 @@ async def get_balance(user_id):
         logging.error(f"Error getting balance for user_id {user_id}: {e}")
         return 0
 
-async def add_payment(user_id, amount, ptype, description="", payment_method=""):
+async def add_payment(user_id, amount, ptype, description=""):
     try:
-        query = "INSERT INTO payments (user_id, amount, status, type, description, payment_method, payment_date) VALUES (%s, %s, 'pending', %s, %s, %s, CURRENT_TIMESTAMP) RETURNING id"
-        new_id = await db_execute(query, (user_id, amount, ptype, description, payment_method), returning=True)
+        query = "INSERT INTO payments (user_id, amount, status, type, description) VALUES (%s, %s, 'pending', %s, %s) RETURNING id"
+        new_id = await db_execute(query, (user_id, amount, ptype, description), returning=True)
         logging.info(f"Payment added for user_id {user_id}, amount: {amount}, type: {ptype}, id: {new_id}")
         return int(new_id) if new_id is not None else None
     except Exception as e:
@@ -577,7 +538,7 @@ async def set_bot_commands():
             BotCommand(command="/start", description="شروع ربات"),
             BotCommand(command="/debug_subscriptions", description="تشخیص اشتراک‌ها (ادمین)"),
             BotCommand(command="/cleardb", description="پاک کردن دیتابیس (ادمین)"),
-            BotCommand(command="/stats", description="نمایش آمار ربات (ادمین)")
+            BotCommand(command="/stats", description="آمار ربات (ادمین)")
         ]
         # تنظیم دستورات عمومی برای همه
         await application.bot.set_my_commands(public_commands)
@@ -674,11 +635,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 payment_id = None
 
             if payment_id:
-                payment = await db_execute("SELECT amount, type, payment_method FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+                payment = await db_execute("SELECT amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
                 if payment:
-                    amount, ptype, payment_method = payment
+                    amount, ptype = payment
                     caption = f"💳 فیش پرداختی از کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}):\n"
-                    caption += f"مبلغ: {amount}\nنوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}\nروش: {payment_method or 'نامشخص'}"
+                    caption += f"مبلغ: {amount}\nنوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}"
 
                     keyboard = InlineKeyboardMarkup([
                         [
@@ -789,7 +750,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plan = "_".join(parts[4:])
             
             if text == "🏦 کارت به کارت":
-                payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan, payment_method="card")
+                payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
                 if payment_id:
                     await add_subscription(user_id, payment_id, plan)
                     await update.message.reply_text(
@@ -806,7 +767,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             if text == "💎 پرداخت با ترون":
-                payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan, payment_method="tron")
+                payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
                 if payment_id:
                     await add_subscription(user_id, payment_id, plan)
                     await update.message.reply_text(
@@ -825,7 +786,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if text == "💰 پرداخت با موجودی":
                 balance = await get_balance(user_id)
                 if balance >= amount:
-                    payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan, payment_method="balance")
+                    payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
                     if payment_id:
                         await add_subscription(user_id, payment_id, plan)
                         await deduct_balance(user_id, amount)
@@ -1054,7 +1015,7 @@ async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
 application.add_handler(CommandHandler("start", start_with_param))
 application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
 application.add_handler(CommandHandler("cleardb", clear_db))
-application.add_handler(CommandHandler("stats", stats))
+application.add_handler(CommandHandler("stats", stats_command))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
