@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS payments (
     amount BIGINT,
     status TEXT,
     type TEXT,
+    payment_method TEXT,
     description TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
@@ -127,6 +128,7 @@ ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS start_date TIMESTAMP;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS duration_days INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_method TEXT;
 UPDATE subscriptions SET start_date = COALESCE(start_date, CURRENT_TIMESTAMP),
                         duration_days = CASE
                             WHEN plan = '🥉۱ ماهه | ۹۰ هزار تومان | نامحدود' THEN 30
@@ -187,12 +189,24 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         best_selling_plan = plan_stats[0] if plan_stats else ("هیچ پلنی", 0)
         
-        # آمار روش‌های پرداخت (ثابت)
+        # آمار روش‌های پرداخت
+        payment_methods = await db_execute(
+            "SELECT payment_method, COUNT(*) as count FROM payments WHERE status = 'approved' GROUP BY payment_method",
+            fetch=True
+        )
+        total_payments = sum([pm[1] for pm in payment_methods]) if payment_methods else 1
         payment_methods_percent = [
-            ("کارت به کارت", 70.0),
-            ("موجودی", 15.0),
-            ("ترون", 15.0)
-        ]
+            (pm[0], round((pm[1] / total_payments) * 100, 1)) 
+            for pm in payment_methods
+            if pm[0] in ["card_to_card", "tron", "balance"]
+        ] if payment_methods else [("کارت به کارت", 0), ("ترون", 0), ("موجودی", 0)]
+        
+        # تنظیم نام‌های نمایش برای روش‌های پرداخت
+        method_names = {
+            "card_to_card": "🏦 کارت به کارت",
+            "tron": "💎 ترون",
+            "balance": "💰 موجودی"
+        }
         
         # آمار اشتراک‌ها
         active_subs = await db_execute(
@@ -235,7 +249,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         stats_message += "💳 روش‌های پرداخت:\n"
         for method, percent in payment_methods_percent:
-            stats_message += f"  • {method}: {percent}% 💸\n"
+            display_name = method_names.get(method, method)
+            stats_message += f"  • {display_name}: {percent}% 💸\n"
         stats_message += f"  • کل تراکنش‌ها: {total_transactions[0] if total_transactions else 0:,} عدد 🔄\n"
         
         await update.message.reply_text(stats_message)
@@ -250,7 +265,6 @@ async def clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
     try:
-        # Delete all data from tables
         await db_execute("DELETE FROM subscriptions")
         await db_execute("DELETE FROM payments")
         await db_execute("DELETE FROM users")
@@ -310,12 +324,11 @@ def get_connection_guide_keyboard():
 
 # ---------- تابع کمکی برای ارسال پیام‌های طولانی ----------
 async def send_long_message(chat_id, text, context, reply_markup=None, parse_mode=None):
-    max_message_length = 4000  # حداکثر طول پیام تلگرام (کمی کمتر از 4096 برای ایمنی)
+    max_message_length = 4000
     if len(text) <= max_message_length:
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
         return
 
-    # تقسیم پیام به قطعات
     messages = []
     current_message = ""
     for line in text.split("\n"):
@@ -327,7 +340,6 @@ async def send_long_message(chat_id, text, context, reply_markup=None, parse_mod
     if current_message:
         messages.append(current_message)
 
-    # ارسال پیام‌ها
     for i, msg in enumerate(messages):
         await context.bot.send_message(
             chat_id=chat_id,
@@ -398,11 +410,11 @@ async def get_balance(user_id):
         logging.error(f"Error getting balance for user_id {user_id}: {e}")
         return 0
 
-async def add_payment(user_id, amount, ptype, description=""):
+async def add_payment(user_id, amount, ptype, payment_method, description=""):
     try:
-        query = "INSERT INTO payments (user_id, amount, status, type, description) VALUES (%s, %s, 'pending', %s, %s) RETURNING id"
-        new_id = await db_execute(query, (user_id, amount, ptype, description), returning=True)
-        logging.info(f"Payment added for user_id {user_id}, amount: {amount}, type: {ptype}, id: {new_id}")
+        query = "INSERT INTO payments (user_id, amount, status, type, payment_method, description) VALUES (%s, %s, 'pending', %s, %s, %s) RETURNING id"
+        new_id = await db_execute(query, (user_id, amount, ptype, payment_method, description), returning=True)
+        logging.info(f"Payment added for user_id {user_id}, amount: {amount}, type: {ptype}, payment_method: {payment_method}, id: {new_id}")
         return int(new_id) if new_id is not None else None
     except Exception as e:
         logging.error(f"Error adding payment for user_id {user_id}: {e}")
@@ -531,20 +543,16 @@ user_states = {}
 # ---------- دستورات و هندلرها ----------
 async def set_bot_commands():
     try:
-        # دستورات برای کاربران عادی (فقط /start)
         public_commands = [
             BotCommand(command="/start", description="شروع ربات")
         ]
-        # دستورات برای ادمین
         admin_commands = [
             BotCommand(command="/start", description="شروع ربات"),
             BotCommand(command="/debug_subscriptions", description="تشخیص اشتراک‌ها (ادمین)"),
             BotCommand(command="/cleardb", description="پاک کردن دیتابیس (ادمین)"),
             BotCommand(command="/stats", description="آمار ربات (ادمین)")
         ]
-        # تنظیم دستورات عمومی برای همه
         await application.bot.set_my_commands(public_commands)
-        # تنظیم دستورات برای ادمین
         await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
         logging.info("Bot commands set successfully")
     except Exception as e:
@@ -621,13 +629,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
-    # ====== بررسی بازگشت به منو در همه حالت‌ها ======
     if text in ["بازگشت به منو", "⬅️ بازگشت به منو"]:
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
         return
 
-    # ====== بررسی فیش پرداخت یا کانفیگ ارسالی توسط ادمین ======
     if update.message.photo or update.message.document or update.message.text:
         state = user_states.get(user_id)
         if state and (state.startswith("awaiting_deposit_receipt_") or state.startswith("awaiting_subscription_receipt_")):
@@ -684,7 +690,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.")
                     return
 
-    # ====== مدیریت گزینه‌های منو ======
     if text == "💰 موجودی":
         await update.message.reply_text("💰 بخش موجودی:\nیک گزینه را انتخاب کنید:", reply_markup=get_balance_keyboard())
         user_states.pop(user_id, None)
@@ -704,7 +709,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_states.get(user_id) == "awaiting_deposit_amount":
         if text.isdigit():
             amount = int(text)
-            payment_id = await add_payment(user_id, amount, "increase_balance")
+            payment_id = await add_payment(user_id, amount, "increase_balance", "card_to_card")
             if payment_id:
                 await update.message.reply_text(
                     f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
@@ -752,7 +757,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plan = "_".join(parts[4:])
             
             if text == "🏦 کارت به کارت":
-                payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
+                payment_id = await add_payment(user_id, amount, "buy_subscription", "card_to_card", description=plan)
                 if payment_id:
                     await add_subscription(user_id, payment_id, plan)
                     await update.message.reply_text(
@@ -769,7 +774,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             if text == "💎 پرداخت با ترون":
-                payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
+                payment_id = await add_payment(user_id, amount, "buy_subscription", "tron", description=plan)
                 if payment_id:
                     await add_subscription(user_id, payment_id, plan)
                     await update.message.reply_text(
@@ -788,7 +793,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if text == "💰 پرداخت با موجودی":
                 balance = await get_balance(user_id)
                 if balance >= amount:
-                    payment_id = await add_payment(user_id, amount, "buy_subscription", description=plan)
+                    payment_id = await add_payment(user_id, amount, "buy_subscription", "balance", description=plan)
                     if payment_id:
                         await add_subscription(user_id, payment_id, plan)
                         await deduct_balance(user_id, amount)
@@ -929,7 +934,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "📘 ویندوز":
         await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن ‌V2rayN هست ✅\n"
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\n"
             "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
             reply_markup=get_connection_guide_keyboard()
         )
@@ -938,7 +943,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "📙 لینوکس":
         await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن ‌V2rayN هست ✅\n"
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\n"
             "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
             reply_markup=get_connection_guide_keyboard()
         )
