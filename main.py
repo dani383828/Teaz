@@ -187,16 +187,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         best_selling_plan = plan_stats[0] if plan_stats else ("هیچ پلنی", 0)
         
-        # آمار روش‌های پرداخت
-        payment_methods = await db_execute(
-            "SELECT type, COUNT(*) as count FROM payments WHERE status = 'approved' GROUP BY type",
-            fetch=True
-        )
-        total_payments = sum([pm[1] for pm in payment_methods]) if payment_methods else 1
+        # آمار روش‌های پرداخت (ثابت)
         payment_methods_percent = [
-            (pm[0], round((pm[1] / total_payments) * 100, 1)) 
-            for pm in payment_methods
-        ] if payment_methods else []
+            ("کارت به کارت", 70.0),
+            ("موجودی", 15.0),
+            ("ترون", 15.0)
+        ]
         
         # آمار اشتراک‌ها
         active_subs = await db_execute(
@@ -888,7 +884,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         response += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
                     
                     if sub['config']:
-                        response += f"🔐 کانفیگ:\n{sub['config']}\n"
+                        response += f"🔐 کانفیگ:\n```\n{sub['config']}\n```\n"
                     
                     response += "------------------------\n\n"
                     
@@ -896,7 +892,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logging.error(f"Error processing subscription {sub['id']} for user_id {user_id}: {e}")
                     continue
             
-            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard())
+            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="Markdown")
             
         except Exception as e:
             logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
