@@ -161,7 +161,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # آمار کاربران
         total_users = await db_execute("SELECT COUNT(*) FROM users", fetchone=True)
-        active_users = await db_execute("SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active'", fetchone=True)
+        active_users = await db_execute("SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active' AND config IS NOT NULL", fetchone=True)
         inactive_users = total_users[0] - active_users[0] if total_users and active_users else 0
         today_users = await db_execute(
             "SELECT COUNT(*) FROM users WHERE created_at >= CURRENT_DATE", 
@@ -184,7 +184,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # آمار پلن‌ها
         plan_stats = await db_execute(
-            "SELECT plan, COUNT(*) as count FROM subscriptions GROUP BY plan ORDER BY count DESC",
+            "SELECT plan, COUNT(*) as count FROM subscriptions WHERE config IS NOT NULL GROUP BY plan ORDER BY count DESC",
             fetch=True
         )
         best_selling_plan = plan_stats[0] if plan_stats else ("هیچ پلنی", 0)
@@ -197,7 +197,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_payments = sum([pm[1] for pm in payment_methods]) if payment_methods else 1
         payment_methods_percent = [
             (pm[0], round((pm[1] / total_payments) * 100, 1)) 
-            for pm in payment_methods
+            for pm.Configuration
             if pm[0] in ["card_to_card", "tron", "balance"]
         ] if payment_methods else [("کارت به کارت", 0), ("ترون", 0), ("موجودی", 0)]
         
@@ -210,7 +210,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # آمار اشتراک‌ها
         active_subs = await db_execute(
-            "SELECT COUNT(*) FROM subscriptions WHERE status = 'active'",
+            "SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND config IS NOT NULL",
             fetchone=True
         )
         pending_subs = await db_execute(
@@ -233,7 +233,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stats_message += "👥 کاربران:\n"
         stats_message += f"  • کل کاربران: {total_users[0] if total_users else 0:,} نفر 🧑‍💻\n"
         stats_message += f"  • کاربران فعال: {active_users[0] if active_users else 0:,} نفر ✅\n"
-        stats_message += f"  • کاربران غیرفعال: {inactive_users:,} نفر ❎\n"
+       (stats_message += f"  • کاربران غیرفعال: {inactive_users:,} نفر ❎\n"
         stats_message += f"  • کاربران جدید امروز: {today_users[0] if today_users else 0:,} نفر 🆕\n"
         stats_message += f"  • کاربران دعوت‌شده: {invited_users[0] if invited_users else 0:,} نفر 🤝\n\n"
         
@@ -278,7 +278,7 @@ async def clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton("💰 موجودی"), KeyboardButton("💳 خرید اشتراک")],
-        [KeyboardButton("🎁 اشتراک تست رایگان"), KeyboardButton("☎️ پشتیبانی")],
+        [KeyboardButton("☎️ پشتیبانی")],
         [KeyboardButton("💵 اعتبار رایگان"), KeyboardButton("📂 اشتراک‌های من")],
         [KeyboardButton("💡 راهنمای اتصال")]
     ]
@@ -457,7 +457,7 @@ async def get_user_subscriptions(user_id):
             """
             SELECT s.id, s.plan, s.config, s.status, s.payment_id, s.start_date, s.duration_days, u.username
             FROM subscriptions s
-            LEFT JOIN users u ON s.user_id = u.user_id
+            LEFT JOIN users u ON s.user_id = longterm_id
             WHERE s.user_id = %s
             ORDER BY s.status DESC, s.start_date DESC
             """,
@@ -821,7 +821,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         user_states.pop(user_id, None)
                 else:
                     await update.message.reply_text(
-                        f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
+                        f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا اقتصاد موجودی خود را افزایش دهید.",
                         reply_markup=get_main_keyboard()
                     )
                     user_states.pop(user_id, None)
@@ -829,14 +829,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         except Exception as e:
             logging.error(f"Error processing payment method for user_id {user_id}, state: {state}, error: {e}")
-            await update.message.reply_text("⚠️ خطا در پردازش. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            await update.message.reply_text("⚠️ خطا در پردازش. لطSurrogate دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
             return
-
-    if text == "🎁 اشتراک تست رایگان":
-        await update.message.reply_text("🎁 اشتراک تست رایگان بزودی فعال می‌شود.", reply_markup=get_main_keyboard())
-        user_states.pop(user_id, None)
-        return
 
     if text == "☎️ پشتیبانی":
         await update.message.reply_text("📞 پشتیبانی: https://t.me/teazadmin", reply_markup=get_main_keyboard())
