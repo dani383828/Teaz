@@ -15,7 +15,7 @@ TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzN
 CHANNEL_USERNAME = "@teazvpn"
 ADMIN_ID = 5542927340
 TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
-BANK_CARD = "6037 9975 9717 2684"
+BANK_CARD = "6221 0612 5283 5204"
 
 RENDER_BASE_URL = os.getenv("RENDER_BASE_URL") or "https://teaz.onrender.com"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     payment_id INTEGER,
     plan TEXT,
     config TEXT,
-    status TEXT DEFAULT 'active',
+    status TEXT DEFAULT 'pending',
     start_date TIMESTAMP,
     duration_days INTEGER
 )
@@ -184,7 +184,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # آمار پلن‌ها
         plan_stats = await db_execute(
-            "SELECT plan, COUNT(*) as count FROM subscriptions WHERE config IS NOT NULL GROUP BY plan ORDER BY count DESC",
+            "SELECT plan, COUNT(*) as count FROM subscriptions WHERE config IS NOT NULL AND status = 'active' GROUP BY plan ORDER BY count DESC",
             fetch=True
         )
         best_selling_plan = plan_stats[0] if plan_stats else ("هیچ پلنی", 0)
@@ -434,18 +434,21 @@ async def add_subscription(user_id, payment_id, plan):
         }
         duration_days = duration_mapping.get(plan, 30)
         await db_execute(
-            "INSERT INTO subscriptions (user_id, payment_id, plan, status, start_date, duration_days) VALUES (%s, %s, %s, 'active', CURRENT_TIMESTAMP, %s)",
+            "INSERT INTO subscriptions (user_id, payment_id, plan, status, start_date, duration_days) VALUES (%s, %s, %s, 'pending', CURRENT_TIMESTAMP, %s)",
             (user_id, payment_id, plan, duration_days)
         )
-        logging.info(f"Subscription added for user_id {user_id}, payment_id: {payment_id}, plan: {plan}, duration: {duration_days} days")
+        logging.info(f"Subscription added for user_id {user_id}, payment_id: {payment_id}, plan: {plan}, duration: {duration_days} days, status: pending")
     except Exception as e:
         logging.error(f"Error adding subscription for user_id {user_id}, payment_id: {payment_id}: {e}")
         raise
 
 async def update_subscription_config(payment_id, config):
     try:
-        await db_execute("UPDATE subscriptions SET config = %s WHERE payment_id = %s", (config, payment_id))
-        logging.info(f"Subscription config updated for payment_id {payment_id}")
+        await db_execute(
+            "UPDATE subscriptions SET config = %s, status = 'active' WHERE payment_id = %s",
+            (config, payment_id)
+        )
+        logging.info(f"Subscription config updated and set to active for payment_id {payment_id}")
     except Exception as e:
         logging.error(f"Error updating subscription config for payment_id {payment_id}: {e}")
 
@@ -733,7 +736,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💳 خرید اشتراک":
         await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard())
-        user_states.pop(user_id, None)
+        meth_id = update.message.message_id
+        user_states[user_id] = f"buy_subscription_{meth_id}"
         return
 
     if text in ["🥉۱ ماهه | ۹۰ هزار تومان | نامحدود", "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود", "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود"]:
@@ -865,208 +869,4 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.error(f"Error sending invite image: {e}")
             await update.message.reply_text(
-                f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
-                reply_markup=get_main_keyboard()
-            )
-        user_states.pop(user_id, None)
-        return
-
-    if text == "📂 اشتراک‌های من":
-        try:
-            subscriptions = await get_user_subscriptions(user_id)
-            if not subscriptions:
-                await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
-                user_states.pop(user_id, None)
-                return
-            
-            current_time = datetime.now()
-            response = "📂 لیست کامل اشتراک‌های شما:\n\n"
-            
-            for sub in subscriptions:
-                try:
-                    response += f"🔹 اشتراک #{sub['id']}\n"
-                    response += f"📌 پلن: {sub['plan']}\n"
-                    response += f"🆔 کد خرید: #{sub['payment_id']}\n"
-                    response += f"📊 وضعیت: {'✅ فعال' if sub['status'] == 'active' else '❌ غیرفعال'}\n"
-                    
-                    if sub['status'] == "active":
-                        remaining_days = max(0, (sub['end_date'] - current_time).days)
-                        response += f"⏳ زمان باقی‌مانده: {remaining_days} روز\n"
-                        response += f"📅 تاریخ شروع: {sub['start_date'].strftime('%Y-%m-%d %H:%M')}\n"
-                        response += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
-                    
-                    if sub['config']:
-                        response += f"🔐 کانفیگ:\n```\n{sub['config']}\n```\n"
-                    
-                    response += "------------------------\n\n"
-                    
-                except Exception as e:
-                    logging.error(f"Error processing subscription {sub['id']} for user_id {user_id}: {e}")
-                    continue
-            
-            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="Markdown")
-            
-        except Exception as e:
-            logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
-            await update.message.reply_text("⚠️ خطا در نمایش اشتراک‌ها. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-        
-        user_states.pop(user_id, None)
-        return
-
-    if text == "💡 راهنمای اتصال":
-        await update.message.reply_text(
-            "راهنمای راه‌اندازی\nدستگاه خود را انتخاب کنید:",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        user_states.pop(user_id, None)
-        return
-
-    if text == "📗 اندروید":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های V2RayNG یا Hiddify(پیشنهادی) است ✅\n"
-            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        user_states.pop(user_id, None)
-        return
-
-    if text == "📕 آیفون/مک":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های Singbox(پیشنهادی) یا Streisand یا V2box(پیشنهادی) هست ✅\n"
-            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        user_states.pop(user_id, None)
-        return
-
-    if text == "📘 ویندوز":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\n"
-            "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        user_states.pop(user_id, None)
-        return
-
-    if text == "📙 لینوکس":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\n"
-            "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        user_states.pop(user_id, None)
-        return
-
-    await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
-    user_states.pop(user_id, None)
-
-async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    await query.answer()
-
-    if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
-        if update.effective_user.id != ADMIN_ID:
-            await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
-            return
-
-        if data.startswith("approve_"):
-            payment_id = int(data.split("_")[1])
-            payment = await db_execute("SELECT user_id, amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            user_id, amount, ptype, description = payment
-
-            await update_payment_status(payment_id, "approved")
-            if ptype == "increase_balance":
-                await add_balance(user_id, amount)
-                await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
-                await query.message.edit_reply_markup(None)
-                await query.message.reply_text("✅ پرداخت تایید شد.")
-            elif ptype == "buy_subscription":
-                await context.bot.send_message(user_id, f"✅ پرداخت تایید شد. اشتراک شما (کد خرید: #{payment_id}) ارسال خواهد شد.")
-                config_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
-                ])
-                await query.message.edit_reply_markup(None)
-                await query.message.reply_text(f"✅ پرداخت برای اشتراک ({description}) تایید شد.", reply_markup=config_keyboard)
-
-        elif data.startswith("reject_"):
-            payment_id = int(data.split("_")[1])
-            payment = await db_execute("SELECT user_id, amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            user_id, amount, ptype = payment
-
-            await update_payment_status(payment_id, "rejected")
-            await context.bot.send_message(user_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
-            await query.message.edit_reply_markup(None)
-            await query.message.reply_text("❌ پرداخت رد شد.")
-
-        elif data.startswith("send_config_"):
-            payment_id = int(data.split("_")[-1])
-            payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
-            user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
-
-async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if args and len(args) > 0:
-        try:
-            invited_by = int(args[0])
-            if invited_by != update.effective_user.id:
-                context.user_data["invited_by"] = invited_by
-        except:
-            context.user_data["invited_by"] = None
-    await start(update, context)
-
-# ---------- ثبت هندلرها ----------
-application.add_handler(CommandHandler("start", start_with_param))
-application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
-application.add_handler(CommandHandler("cleardb", clear_db))
-application.add_handler(CommandHandler("stats", stats_command))
-application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
-application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
-application.add_handler(CallbackQueryHandler(admin_callback_handler))
-
-# ---------- webhook endpoint ----------
-@app.post(WEBHOOK_PATH)
-async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.update_queue.put(update)
-    return {"ok": True}
-
-# ---------- lifecycle events ----------
-@app.on_event("startup")
-async def on_startup():
-    init_db_pool()
-    await create_tables()
-    try:
-        await application.bot.set_webhook(url=WEBHOOK_URL)
-        logging.info("Webhook set successfully")
-    except Exception as e:
-        logging.error(f"Error setting webhook: {e}")
-    await set_bot_commands()
-    await application.initialize()
-    await application.start()
-    print("✅ Webhook set:", WEBHOOK_URL)
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    try:
-        await application.stop()
-        await application.shutdown()
-    finally:
-        close_db_pool()
-
-# ---------- اجرای محلی (برای debug) ----------
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+                f"💵……
