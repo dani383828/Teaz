@@ -15,7 +15,7 @@ TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzN
 CHANNEL_USERNAME = "@teazvpn"
 ADMIN_ID = 5542927340
 TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
-BANK_CARD = "5054 1610 1938 9760"
+BANK_CARD = "6221 0612 5283 5204"
 
 RENDER_BASE_URL = os.getenv("RENDER_BASE_URL") or "https://teaz.onrender.com"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
@@ -197,7 +197,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_payments = sum([pm[1] for pm in payment_methods]) if payment_methods else 1
         payment_methods_percent = [
             (pm[0], round((pm[1] / total_payments) * 100, 1)) 
-            for pm.Configuration
+            for pm in payment_methods
             if pm[0] in ["card_to_card", "tron", "balance"]
         ] if payment_methods else [("کارت به کارت", 0), ("ترون", 0), ("موجودی", 0)]
         
@@ -209,6 +209,10 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         
         # آمار اشتراک‌ها
+        total_subs = await db_execute(
+            "SELECT COUNT(*) FROM subscriptions",
+            fetchone=True
+        )
         active_subs = await db_execute(
             "SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND config IS NOT NULL",
             fetchone=True
@@ -233,7 +237,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stats_message += "👥 کاربران:\n"
         stats_message += f"  • کل کاربران: {total_users[0] if total_users else 0:,} نفر 🧑‍💻\n"
         stats_message += f"  • کاربران فعال: {active_users[0] if active_users else 0:,} نفر ✅\n"
-       (stats_message += f"  • کاربران غیرفعال: {inactive_users:,} نفر ❎\n"
+        stats_message += f"  • کاربران غیرفعال: {inactive_users:,} نفر ❎\n"
         stats_message += f"  • کاربران جدید امروز: {today_users[0] if today_users else 0:,} نفر 🆕\n"
         stats_message += f"  • کاربران دعوت‌شده: {invited_users[0] if invited_users else 0:,} نفر 🤝\n\n"
         
@@ -243,6 +247,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stats_message += f"  • کل درآمد: {total_income[0] if total_income else 0:,} تومان 🔥\n\n"
         
         stats_message += "📦 اشتراک‌ها:\n"
+        stats_message += f"  • کل اشتراک‌ها: {total_subs[0] if total_subs else 0:,} عدد 📋\n"
         stats_message += f"  • اشتراک‌های فعال: {active_subs[0] if active_subs else 0:,} عدد 🟢\n"
         stats_message += f"  • اشتراک‌های در انتظار: {pending_subs[0] if pending_subs else 0:,} عدد ⏳\n"
         stats_message += f"  • پرفروش‌ترین پلن: {best_selling_plan[0]} ({best_selling_plan[1]:,} عدد) 🏆\n\n"
@@ -278,7 +283,7 @@ async def clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton("💰 موجودی"), KeyboardButton("💳 خرید اشتراک")],
-        [KeyboardButton("☎️ پشتیبانی")],
+        [KeyboardButton("🎁 اشتراک تست رایگان"), KeyboardButton("☎️ پشتیبانی")],
         [KeyboardButton("💵 اعتبار رایگان"), KeyboardButton("📂 اشتراک‌های من")],
         [KeyboardButton("💡 راهنمای اتصال")]
     ]
@@ -457,7 +462,7 @@ async def get_user_subscriptions(user_id):
             """
             SELECT s.id, s.plan, s.config, s.status, s.payment_id, s.start_date, s.duration_days, u.username
             FROM subscriptions s
-            LEFT JOIN users u ON s.user_id = longterm_id
+            LEFT JOIN users u ON s.user_id = u.user_id
             WHERE s.user_id = %s
             ORDER BY s.status DESC, s.start_date DESC
             """,
@@ -714,7 +719,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(
                     f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
                     f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\n\n"
-                    f"یا\n\n🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nبحق",
+                    f"یا\n\n🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
                     reply_markup=get_back_keyboard(),
                     parse_mode="MarkdownV2"
                 )
@@ -762,7 +767,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await add_subscription(user_id, payment_id, plan)
                     await update.message.reply_text(
                         f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                        f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nبحق",
+                        f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
                         reply_markup=get_back_keyboard(),
                         parse_mode="MarkdownV2"
                     )
@@ -821,7 +826,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         user_states.pop(user_id, None)
                 else:
                     await update.message.reply_text(
-                        f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا اقتصاد موجودی خود را افزایش دهید.",
+                        f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
                         reply_markup=get_main_keyboard()
                     )
                     user_states.pop(user_id, None)
@@ -829,9 +834,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         except Exception as e:
             logging.error(f"Error processing payment method for user_id {user_id}, state: {state}, error: {e}")
-            await update.message.reply_text("⚠️ خطا در پردازش. لطSurrogate دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            await update.message.reply_text("⚠️ خطا در پردازش. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
             return
+
+    if text == "🎁 اشتراک تست رایگان":
+        await update.message.reply_text(
+            "🎁 برای دریافت اشتراک تست رایگان، لطفا با پشتیبانی تماس بگیرید: https://t.me/teazadmin",
+            reply_markup=get_main_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
 
     if text == "☎️ پشتیبانی":
         await update.message.reply_text("📞 پشتیبانی: https://t.me/teazadmin", reply_markup=get_main_keyboard())
