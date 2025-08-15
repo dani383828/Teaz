@@ -510,40 +510,41 @@ async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
-    user_id = update.effective_user.id
     try:
         rows = await db_execute(
             """
             SELECT s.user_id, u.username, s.plan, s.payment_id, s.start_date, s.duration_days, s.status
             FROM subscriptions s
-            JOIN users u ON s.user_id = u.user_id
-            WHERE s.user_id = %s
+            LEFT JOIN users u ON s.user_id = u.user_id
+            ORDER BY s.status DESC, s.start_date DESC
             """,
-            (user_id,), fetch=True
+            fetch=True
         )
         if not rows:
-            await update.message.reply_text(f"📂 هیچ اشتراکی برای user_id {user_id} یافت نشد.")
-        else:
-            response = f"📂 اشتراک‌های یافت‌شده برای user_id {user_id}:\n\n"
-            current_time = datetime.now()
-            for row in rows:
-                user_id, username, plan, payment_id, start_date, duration_days, status = row
-                username_display = f"@{username}" if username else f"@{user_id}"
-                start_date = start_date if start_date else datetime.now()
-                duration_days = duration_days if duration_days else 30
-                remaining_days = 0
-                if status == "active":
-                    end_date = start_date + timedelta(days=duration_days)
-                    remaining_days = max(0, (end_date - current_time).days)
-                response += f"کاربر: {username_display}\n"
-                response += f"اشتراک: {plan}\n"
-                response += f"کد خرید: #{payment_id}\n"
-                response += f"وضعیت: {'فعال' if status == 'active' else 'در انتظار'}\n"
-                response += f"زمان باقی‌مانده: {remaining_days} روز\n"
-                response += "--------------------\n"
-            await send_long_message(user_id, response, context)
+            await update.message.reply_text("📂 هیچ اشتراکی برای هیچ کاربری یافت نشد.")
+            return
+
+        response = "📂 لیست تمام اشتراک‌های کاربران:\n\n"
+        current_time = datetime.now()
+        for row in rows:
+            user_id, username, plan, payment_id, start_date, duration_days, status = row
+            username_display = f"@{username}" if username else f"@{user_id}"
+            start_date = start_date if start_date else current_time
+            duration_days = duration_days if duration_days else 30
+            remaining_days = 0
+            if status == "active":
+                end_date = start_date + timedelta(days=duration_days)
+                remaining_days = max(0, (end_date - current_time).days)
+            response += f"کاربر: {username_display}\n"
+            response += f"اشتراک: {plan}\n"
+            response += f"کد خرید: #{payment_id}\n"
+            response += f"وضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
+            response += f"زمان باقی‌مانده: {remaining_days} روز\n"
+            response += "--------------------\n"
+        
+        await send_long_message(update.effective_user.id, response, context)
     except Exception as e:
-        logging.error(f"Error in debug_subscriptions for user_id {user_id}: {e}")
+        logging.error(f"Error in debug_subscriptions: {e}")
         await update.message.reply_text(f"⚠️ خطا در بررسی اشتراک‌ها: {str(e)}")
 
 # ---------- وضعیت کاربر در مموری ----------
