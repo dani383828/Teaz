@@ -638,6 +638,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
+    # بررسی حالت awaiting_contact برای جلوگیری از پردازش پیام‌های متنی
+    if user_states.get(user_id) == "awaiting_contact":
+        contact_keyboard = ReplyKeyboardMarkup(
+            [[KeyboardButton("ارسال شماره تماس", request_contact=True)]], 
+            resize_keyboard=True, 
+            one_time_keyboard=True
+        )
+        await update.message.reply_text(
+            "⚠️ لطفا ابتدا شماره تماس خود را از طریق دکمه ارسال کنید.",
+            reply_markup=contact_keyboard
+        )
+        return
+
     if text in ["بازگشت به منو", "⬅️ بازگشت به منو"]:
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
