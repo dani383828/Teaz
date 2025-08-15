@@ -96,7 +96,8 @@ CREATE TABLE IF NOT EXISTS users (
     balance BIGINT DEFAULT 0,
     invited_by BIGINT,
     phone TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_agent BOOLEAN DEFAULT FALSE
 )
 """
 CREATE_PAYMENTS_SQL = """
@@ -127,6 +128,7 @@ MIGRATE_SUBSCRIPTIONS_SQL = """
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS start_date TIMESTAMP;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS duration_days INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_agent BOOLEAN DEFAULT FALSE;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_method TEXT;
 UPDATE subscriptions SET start_date = COALESCE(start_date, CURRENT_TIMESTAMP),
@@ -134,6 +136,9 @@ UPDATE subscriptions SET start_date = COALESCE(start_date, CURRENT_TIMESTAMP),
                             WHEN plan = '🥉۱ ماهه | ۹۰ هزار تومان | نامحدود' THEN 30
                             WHEN plan = '🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود' THEN 90
                             WHEN plan = '🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود' THEN 180
+                            WHEN plan = '🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود' THEN 30
+                            WHEN plan = '🥈۳ ماهه | ۲۲۰,۰۰۰ تومان | نامحدود' THEN 90
+                            WHEN plan = '🥇۶ ماهه | ۴۰۰,۰۰۰ تومان | نامحدود' THEN 180
                             WHEN plan = '۱ ماهه: ۹۰ هزار تومان' THEN 30
                             WHEN plan = '۳ ماهه: ۲۵۰ هزار تومان' THEN 90
                             WHEN plan = '۶ ماهه: ۴۵۰ هزار تومان' THEN 180
@@ -152,6 +157,40 @@ async def create_tables():
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
 
+# ---------- دستور جدید برای نمایش شماره‌ها ----------
+async def numbers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    try:
+        users = await db_execute(
+            "SELECT user_id, username, phone FROM users ORDER BY created_at DESC",
+            fetch=True
+        )
+        if not users:
+            await update.message.reply_text("📂 هیچ کاربری یافت نشد.")
+            return
+
+        response = "📞 لیست شماره‌های کاربران:\n\n"
+        for user in users:
+            user_id, username, phone = user
+            username_display = f"@{username}" if username else f"ID: {user_id}"
+            phone_display = phone if phone else "نامشخص"
+            response += f"کاربر: {username_display}\n"
+            response += f"شماره: {phone_display}\n"
+            response += "--------------------\n"
+
+        await send_long_message(
+            update.effective_user.id,
+            response,
+            context,
+            reply_markup=get_main_keyboard()
+        )
+    except Exception as e:
+        logging.error(f"Error in numbers_command: {e}")
+        await update.message.reply_text("⚠️ خطایی در نمایش شماره‌ها رخ داد. لطفاً دوباره تلاش کنید.")
+
 # ---------- دستور آمار ربات ----------
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -159,7 +198,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        # آمار کاربران
         total_users = await db_execute("SELECT COUNT(*) FROM users", fetchone=True)
         active_users = await db_execute("SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active' AND config IS NOT NULL", fetchone=True)
         inactive_users = total_users[0] - active_users[0] if total_users and active_users else 0
@@ -168,7 +206,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fetchone=True
         )
         
-        # آمار درآمد
         today_income = await db_execute(
             "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved' AND created_at >= CURRENT_DATE",
             fetchone=True
@@ -182,14 +219,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fetchone=True
         )
         
-        # آمار پلن‌ها
         plan_stats = await db_execute(
             "SELECT plan, COUNT(*) as count FROM subscriptions WHERE config IS NOT NULL AND status = 'active' GROUP BY plan ORDER BY count DESC",
             fetch=True
         )
         best_selling_plan = plan_stats[0] if plan_stats else ("هیچ پلنی", 0)
         
-        # آمار روش‌های پرداخت
         payment_methods = await db_execute(
             "SELECT payment_method, COUNT(*) as count FROM payments WHERE status = 'approved' GROUP BY payment_method",
             fetch=True
@@ -201,14 +236,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if pm[0] in ["card_to_card", "tron", "balance"]
         ] if payment_methods else [("کارت به کارت", 0), ("ترون", 0), ("موجودی", 0)]
         
-        # تنظیم نام‌های نمایش برای روش‌های پرداخت
         method_names = {
             "card_to_card": "🏦 کارت به کارت",
             "tron": "💎 ترون",
             "balance": "💰 موجودی"
         }
         
-        # آمار اشتراک‌ها
         total_subs = await db_execute(
             "SELECT COUNT(*) FROM subscriptions",
             fetchone=True
@@ -226,13 +259,11 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fetchone=True
         )
         
-        # آمار دعوت‌ها
         invited_users = await db_execute(
             "SELECT COUNT(*) FROM users WHERE invited_by IS NOT NULL",
             fetchone=True
         )
         
-        # ساخت پیام آماری
         stats_message = "🌟 گزارش عملکرد تیز VPN 🚀\n\n"
         stats_message += "👥 کاربران:\n"
         stats_message += f"  • کل کاربران: {total_users[0] if total_users else 0:,} نفر 🧑‍💻\n"
@@ -285,7 +316,7 @@ def get_main_keyboard():
         [KeyboardButton("💰 موجودی"), KeyboardButton("💳 خرید اشتراک")],
         [KeyboardButton("🎁 اشتراک تست رایگان"), KeyboardButton("☎️ پشتیبانی")],
         [KeyboardButton("💵 اعتبار رایگان"), KeyboardButton("📂 اشتراک‌های من")],
-        [KeyboardButton("💡 راهنمای اتصال")]
+        [KeyboardButton("💡 راهنمای اتصال"), KeyboardButton("🧑‍💼 درخواست نمایندگی")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -299,13 +330,21 @@ def get_balance_keyboard():
 def get_back_keyboard():
     return ReplyKeyboardMarkup([[KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
 
-def get_subscription_keyboard():
-    keyboard = [
-        [KeyboardButton("🥉۱ ماهه | ۹۰ هزار تومان | نامحدود")],
-        [KeyboardButton("🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود")],
-        [KeyboardButton("🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود")],
-        [KeyboardButton("⬅️ بازگشت به منو")]
-    ]
+def get_subscription_keyboard(is_agent=False):
+    if is_agent:
+        keyboard = [
+            [KeyboardButton("🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود")],
+            [KeyboardButton("🥈۳ ماهه | ۲۲۰,۰۰۰ تومان | نامحدود")],
+            [KeyboardButton("🥇۶ ماهه | ۴۰۰,۰۰۰ تومان | نامحدود")],
+            [KeyboardButton("⬅️ بازگشت به منو")]
+        ]
+    else:
+        keyboard = [
+            [KeyboardButton("🥉۱ ماهه | ۹۰ هزار تومان | نامحدود")],
+            [KeyboardButton("🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود")],
+            [KeyboardButton("🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود")],
+            [KeyboardButton("⬅️ بازگشت به منو")]
+        ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_payment_method_keyboard():
@@ -366,7 +405,7 @@ async def ensure_user(user_id, username, invited_by=None):
         row = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,), fetchone=True)
         if not row:
             await db_execute(
-                "INSERT INTO users (user_id, username, invited_by) VALUES (%s, %s, %s)",
+                "INSERT INTO users (user_id, username, invited_by, is_agent) VALUES (%s, %s, %s, FALSE)",
                 (user_id, username, invited_by)
             )
             if invited_by and invited_by != user_id:
@@ -376,6 +415,21 @@ async def ensure_user(user_id, username, invited_by=None):
         logging.info(f"User {user_id} ensured in database")
     except Exception as e:
         logging.error(f"Error ensuring user {user_id}: {e}")
+
+async def set_user_agent(user_id):
+    try:
+        await db_execute("UPDATE users SET is_agent = TRUE WHERE user_id = %s", (user_id,))
+        logging.info(f"User {user_id} set as agent")
+    except Exception as e:
+        logging.error(f"Error setting user {user_id} as agent: {e}")
+
+async def is_user_agent(user_id):
+    try:
+        row = await db_execute("SELECT is_agent FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        return row[0] if row and row[0] is not None else False
+    except Exception as e:
+        logging.error(f"Error checking agent status for user_id {user_id}: {e}")
+        return False
 
 async def save_user_phone(user_id, phone):
     try:
@@ -430,7 +484,10 @@ async def add_subscription(user_id, payment_id, plan):
         duration_mapping = {
             "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود": 30,
             "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود": 90,
-            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": 180
+            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": 180,
+            "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود": 30,
+            "🥈۳ ماهه | ۲۲۰,۰۰۰ تومان | نامحدود": 90,
+            "🥇۶ ماهه | ۴۰۰,۰۰۰ تومان | نامحدود": 180
         }
         duration_days = duration_mapping.get(plan, 30)
         await db_execute(
@@ -560,7 +617,8 @@ async def set_bot_commands():
             BotCommand(command="/start", description="شروع ربات"),
             BotCommand(command="/debug_subscriptions", description="تشخیص اشتراک‌ها (ادمین)"),
             BotCommand(command="/cleardb", description="پاک کردن دیتابیس (ادمین)"),
-            BotCommand(command="/stats", description="آمار ربات (ادمین)")
+            BotCommand(command="/stats", description="آمار ربات (ادمین)"),
+            BotCommand(command="/numbers", description="نمایش شماره‌های کاربران (ادمین)")
         ]
         await application.bot.set_my_commands(public_commands)
         await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
@@ -639,7 +697,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
-    # بررسی حالت awaiting_contact برای جلوگیری از پردازش پیام‌های متنی
     if user_states.get(user_id) == "awaiting_contact":
         contact_keyboard = ReplyKeyboardMarkup(
             [[KeyboardButton("ارسال شماره تماس", request_contact=True)]], 
@@ -659,18 +716,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.message.photo or update.message.document or update.message.text:
         state = user_states.get(user_id)
-        if state and (state.startswith("awaiting_deposit_receipt_") or state.startswith("awaiting_subscription_receipt_")):
+        if state and (
+            state.startswith("awaiting_deposit_receipt_") or 
+            state.startswith("awaiting_subscription_receipt_") or 
+            state.startswith("awaiting_agency_receipt_")
+        ):
             try:
                 payment_id = int(state.split("_")[-1])
             except:
                 payment_id = None
 
             if payment_id:
-                payment = await db_execute("SELECT amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+                payment = await db_execute("SELECT amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
                 if payment:
-                    amount, ptype = payment
+                    amount, ptype, description = payment
                     caption = f"💳 فیش پرداختی از کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}):\n"
-                    caption += f"مبلغ: {amount}\nنوع: {'افزایش موجودی' if ptype == 'increase_balance' else 'خرید اشتراک'}"
+                    caption += f"مبلغ: {amount}\nنوع: {ptype if ptype != 'agency_request' else 'درخواست نمایندگی'}"
 
                     keyboard = InlineKeyboardMarkup([
                         [
@@ -750,15 +811,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "💳 خرید اشتراک":
-        await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard())
+        is_agent = await is_user_agent(user_id)
+        await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent))
         user_states.pop(user_id, None)
         return
 
-    if text in ["🥉۱ ماهه | ۹۰ هزار تومان | نامحدود", "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود", "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود"]:
+    if text in [
+        "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود", "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود", "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود",
+        "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود", "🥈۳ ماهه | ۲۲۰,۰۰۰ تومان | نامحدود", "🥇۶ ماهه | ۴۰۰,۰۰۰ تومان | نامحدود"
+    ]:
         mapping = {
             "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود": (90000, 0),
             "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود": (250000, 1),
-            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": (450000, 2)
+            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": (450000, 2),
+            "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود": (70000, 0),
+            "🥈۳ ماهه | ۲۲۰,۰۰۰ تومان | نامحدود": (220000, 1),
+            "🥇۶ ماهه | ۴۰۰,۰۰۰ تومان | نامحدود": (400000, 2)
         }
         amount, plan_index = mapping.get(text, (0, -1))
         if plan_index == -1:
@@ -976,6 +1044,95 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states.pop(user_id, None)
         return
 
+    if text == "🧑‍💼 درخواست نمایندگی":
+        is_agent = await is_user_agent(user_id)
+        if is_agent:
+            await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent=True))
+            user_states.pop(user_id, None)
+            return
+
+        agency_text = (
+            "🚀 اعطای نمایندگی رسمی تیز وی پی ان 🚀\n\n"
+            "اگر به دنبال یک فرصت درآمدزایی پایدار و بدون محدودیت هستید، حالا بهترین زمان برای پیوستن به تیم ماست!\n"
+            "ما به تعداد محدودی نماینده رسمی می‌پذیریم که بتوانند با فروش سرویس‌های پرسرعت و پایدار تیز وی پی ان، کسب‌وکار خودشان را راه‌اندازی کنند.\n\n"
+            "💰 شرایط دریافت نمایندگی:\n"
+            "برای شروع همکاری و فعال‌سازی پنل اختصاصی، کافیست ۱ میلیون تومان واریز کنید.\n"
+            "پس از واریز، شما به یک پنل کامل و شخصی دسترسی خواهید داشت که امکان ساخت و مدیریت اکانت‌ها را برایتان فراهم می‌کند.\n\n"
+            "📦 قیمت پلن‌ها برای نمایندگان:\n"
+            "🥉 یک ماهه | ۷۰,۰۰۰ تومان | نامحدود (٪۲۲ کاهش)\n"
+            "🥈 سه ماهه | ۲۲۰,۰۰۰ تومان | نامحدود (٪۱۲ کاهش)\n"
+            "🥇 شش ماهه | ۴۰۰,۰۰۰ تومان | نامحدود (٪۱۱ کاهش)\n\n"
+            "🔹 اکانت‌ها کاملاً نامحدود هستند (بدون محدودیت حجم یا سرعت)\n"
+            "🔹 شما تعیین‌کننده قیمت فروش به مشتری هستید\n"
+            "🔹 پشتیبانی کامل و ۲۴ ساعته\n\n"
+            "🔻 در صورت تایید موارد بالا روش پرداخت خود را انتخاب کنید"
+        )
+        await update.message.reply_text(agency_text, reply_markup=get_payment_method_keyboard())
+        user_states[user_id] = "awaiting_agency_payment_method"
+        return
+
+    if user_states.get(user_id) == "awaiting_agency_payment_method":
+        amount = 1000000
+        description = "درخواست نمایندگی"
+        if text == "🏦 کارت به کارت":
+            payment_id = await add_payment(user_id, amount, "agency_request", "card_to_card", description=description)
+            if payment_id:
+                await update.message.reply_text(
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                    f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="MarkdownV2"
+                )
+                user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
+            else:
+                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+            return
+
+        if text == "💎 پرداخت با ترون":
+            payment_id = await add_payment(user_id, amount, "agency_request", "tron", description=description)
+            if payment_id:
+                await update.message.reply_text(
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                    f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="MarkdownV2"
+                )
+                user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
+            else:
+                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+            return
+
+        if text == "💰 پرداخت با موجودی":
+            balance = await get_balance(user_id)
+            if balance >= amount:
+                payment_id = await add_payment(user_id, amount, "agency_request", "balance", description=description)
+                if payment_id:
+                    await deduct_balance(user_id, amount)
+                    await update_payment_status(payment_id, "approved")
+                    await set_user_agent(user_id)
+                    await add_balance(user_id, amount)  # Add the 1M to balance
+                    await update.message.reply_text(
+                        "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.",
+                        reply_markup=get_main_keyboard()
+                    )
+                    await context.bot.send_message(
+                        chat_id=ADMIN_ID,
+                        text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود نمایندگی خریداری کرد."
+                    )
+                    user_states.pop(user_id, None)
+                else:
+                    await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                    user_states.pop(user_id, None)
+            else:
+                await update.message.reply_text(
+                    f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+            return
+
     await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
     user_states.pop(user_id, None)
 
@@ -1010,6 +1167,12 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 ])
                 await query.message.edit_reply_markup(None)
                 await query.message.reply_text(f"✅ پرداخت برای اشتراک ({description}) تایید شد.", reply_markup=config_keyboard)
+            elif ptype == "agency_request":
+                await set_user_agent(user_id)
+                await add_balance(user_id, amount)  # Add the 1M to balance
+                await context.bot.send_message(user_id, "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.")
+                await query.message.edit_reply_markup(None)
+                await query.message.reply_text("✅ درخواست نمایندگی تایید شد.")
 
         elif data.startswith("reject_"):
             payment_id = int(data.split("_")[1])
@@ -1049,6 +1212,7 @@ application.add_handler(CommandHandler("start", start_with_param))
 application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
 application.add_handler(CommandHandler("cleardb", clear_db))
 application.add_handler(CommandHandler("stats", stats_command))
+application.add_handler(CommandHandler("numbers", numbers_command))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
