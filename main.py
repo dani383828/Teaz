@@ -132,7 +132,8 @@ CREATE TABLE IF NOT EXISTS coupons (
     discount_percent INTEGER,
     user_id BIGINT,
     is_used BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP
 )
 """
 MIGRATE_SUBSCRIPTIONS_SQL = """
@@ -431,11 +432,12 @@ async def send_long_message(chat_id, text, context, reply_markup=None, parse_mod
 # ---------- توابع DB برای کوپن‌ها ----------
 async def create_coupon(code, discount_percent, user_id=None):
     try:
+        expires_at = datetime.now() + timedelta(days=3)  # Set expiration to 3 days from now
         await db_execute(
-            "INSERT INTO coupons (code, discount_percent, user_id, is_used) VALUES (%s, %s, %s, FALSE)",
-            (code, discount_percent, user_id)
+            "INSERT INTO coupons (code, discount_percent, user_id, is_used, expires_at) VALUES (%s, %s, %s, FALSE, %s)",
+            (code, discount_percent, user_id, expires_at)
         )
-        logging.info(f"Coupon {code} created with {discount_percent}% discount for user_id {user_id or 'all'}")
+        logging.info(f"Coupon {code} created with {discount_percent}% discount for user_id {user_id or 'all'}, expires at {expires_at}")
     except Exception as e:
         logging.error(f"Error creating coupon {code}: {e}")
         raise
@@ -443,16 +445,18 @@ async def create_coupon(code, discount_percent, user_id=None):
 async def validate_coupon(code, user_id):
     try:
         row = await db_execute(
-            "SELECT discount_percent, user_id, is_used FROM coupons WHERE code = %s",
+            "SELECT discount_percent, user_id, is_used, expires_at FROM coupons WHERE code = %s",
             (code,), fetchone=True
         )
         if not row:
             return None, "کد تخفیف نامعتبر است."
-        discount_percent, coupon_user_id, is_used = row
+        discount_percent, coupon_user_id, is_used, expires_at = row
         if is_used:
             return None, "این کد تخفیف قبلاً استفاده شده است."
         if coupon_user_id is not None and coupon_user_id != user_id:
             return None, "این کد تخفیف برای شما نیست."
+        if expires_at and datetime.now() > expires_at:
+            return None, "این کد تخفیف منقضی شده است."
         if await is_user_agent(user_id):
             return None, "نمایندگان نمی‌توانند از کد تخفیف استفاده کنند."
         return discount_percent, None
@@ -888,7 +892,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         try:
                             await context.bot.send_message(
                                 chat_id=user[0],
-                                text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
+                                text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
                                 parse_mode="Markdown"
                             )
                             sent_count += 1
@@ -896,7 +900,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             logging.error(f"Error sending coupon to user_id {user[0]}: {e}")
                             continue
                     await update.message.reply_text(
-                        f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر (غیر از نمایندگان) ارسال شد.",
+                        f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر (غیر از نمایندگان) ارسال شد.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
                         reply_markup=get_main_keyboard(),
                         parse_mode="Markdown"
                     )
@@ -927,11 +931,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await create_coupon(coupon_code, discount_percent, target_user_id)
                     await context.bot.send_message(
                         chat_id=target_user_id,
-                        text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
+                        text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
                         parse_mode="Markdown"
                     )
                     await update.message.reply_text(
-                        f"✅ کد تخفیف `{coupon_code}` برای کاربر با ID {target_user_id} ارسال شد.",
+                        f"✅ کد تخفیف `{coupon_code}` برای کاربر با ID {target_user_id} ارسال شد.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
                         reply_markup=get_main_keyboard(),
                         parse_mode="Markdown"
                     )
@@ -975,7 +979,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             try:
                                 await context.bot.send_message(
                                     chat_id=user[0],
-                                    text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
+                                    text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
                                     parse_mode="Markdown"
                                 )
                                 sent_count += 1
@@ -983,7 +987,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 logging.error(f"Error sending coupon to user_id {user[0]}: {e}")
                                 continue
                         await update.message.reply_text(
-                            f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر ({percent}% از کاربران غیر نماینده) ارسال شد.",
+                            f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر ({percent}% از کاربران غیر نماینده) ارسال شد.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
                             reply_markup=get_main_keyboard(),
                             parse_mode="Markdown"
                         )
