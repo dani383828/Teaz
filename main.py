@@ -888,11 +888,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         user_states.pop(user_id, None)
                         return
                     sent_count = 0
+                    expires_at = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d %H:%M')
                     for user in users:
                         try:
                             await context.bot.send_message(
                                 chat_id=user[0],
-                                text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
+                                text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است و تا تاریخ {expires_at} معتبر است.",
                                 parse_mode="Markdown"
                             )
                             sent_count += 1
@@ -900,7 +901,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             logging.error(f"Error sending coupon to user_id {user[0]}: {e}")
                             continue
                     await update.message.reply_text(
-                        f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر (غیر از نمایندگان) ارسال شد.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
+                        f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر (غیر از نمایندگان) ارسال شد.",
                         reply_markup=get_main_keyboard(),
                         parse_mode="Markdown"
                     )
@@ -914,13 +915,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_states.pop(user_id, None)
                 return
             elif text == "👤 برای یک نفر":
-                target_user_id = 6056483071
+                target_user_id = 6056483071  # کاربر مشخص‌شده
                 user = await db_execute(
-                    "SELECT user_id, is_agent, username FROM users WHERE user_id = %s",
+                    "SELECT user_id, is_agent FROM users WHERE user_id = %s",
                     (target_user_id,), fetchone=True
                 )
                 if user:
-                    _, is_agent, username = user
+                    _, is_agent = user
                     if is_agent:
                         await update.message.reply_text(
                             "⚠️ این کاربر نماینده است و نمی‌تواند کد تخفیف دریافت کند.",
@@ -928,26 +929,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         user_states.pop(user_id, None)
                         return
+                    expires_at = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d %H:%M')
                     await create_coupon(coupon_code, discount_percent, target_user_id)
-                    try:
-                        await context.bot.send_message(
-                            chat_id=target_user_id,
-                            text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
-                            parse_mode="Markdown"
-                        )
-                        await update.message.reply_text(
-                            f"✅ کد تخفیف `{coupon_code}` برای کاربر @{username or target_user_id} ارسال شد.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
-                            reply_markup=get_main_keyboard(),
-                            parse_mode="Markdown"
-                        )
-                        user_states.pop(user_id, None)
-                    except Exception as e:
-                        logging.error(f"Error sending coupon to user_id {target_user_id}: {e}")
-                        await update.message.reply_text(
-                            f"⚠️ خطا در ارسال کد تخفیف برای کاربر @{username or target_user_id}.",
-                            reply_markup=get_main_keyboard()
-                        )
-                        user_states.pop(user_id, None)
+                    await context.bot.send_message(
+                        chat_id=target_user_id,
+                        text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است و تا تاریخ {expires_at} معتبر است.",
+                        parse_mode="Markdown"
+                    )
+                    await update.message.reply_text(
+                        f"✅ کد تخفیف `{coupon_code}` برای کاربر با ID {target_user_id} ارسال شد.",
+                        reply_markup=get_main_keyboard(),
+                        parse_mode="Markdown"
+                    )
+                    user_states.pop(user_id, None)
                 else:
                     await update.message.reply_text(
                         f"⚠️ کاربری با ID {target_user_id} یافت نشد.",
@@ -981,13 +975,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         total_users = len(users)
                         num_users = max(1, round(total_users * (percent / 100)))
                         selected_users = random.sample(users, min(num_users, total_users))
+                        expires_at = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d %H:%M')
                         await create_coupon(coupon_code, discount_percent)
                         sent_count = 0
                         for user in selected_users:
                             try:
                                 await context.bot.send_message(
                                     chat_id=user[0],
-                                    text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
+                                    text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است و تا تاریخ {expires_at} معتبر است.",
                                     parse_mode="Markdown"
                                 )
                                 sent_count += 1
@@ -995,7 +990,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 logging.error(f"Error sending coupon to user_id {user[0]}: {e}")
                                 continue
                         await update.message.reply_text(
-                            f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر ({percent}% از کاربران غیر نماینده) ارسال شد.\n⚠️ این کد فقط تا ۳ روز اعتبار دارد!",
+                            f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر ({percent}% از کاربران غیر نماینده) ارسال شد.",
                             reply_markup=get_main_keyboard(),
                             parse_mode="Markdown"
                         )
@@ -1385,7 +1380,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await deduct_balance(user_id, amount)
                     await update_payment_status(payment_id, "approved")
                     await set_user_agent(user_id)
-                    await add_balance(user_id, amount)
+                    await add_balance(user_id, amount)  # Add the 1M to balance
                     await update.message.reply_text(
                         "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.",
                         reply_markup=get_main_keyboard()
@@ -1414,7 +1409,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
     await query.answer()
 
-    if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
+    ifнциклоп
+data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
         if update.effective_user.id != ADMIN_ID:
             await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
             return
@@ -1442,7 +1438,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 await query.message.reply_text(f"✅ پرداخت برای اشتراک ({description}) تایید شد.", reply_markup=config_keyboard)
             elif ptype == "agency_request":
                 await set_user_agent(user_id)
-                await add_balance(user_id, amount)
+                await add_balance(user_id, amount)  # Add the 1M to balance
                 await context.bot.send_message(user_id, "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.")
                 await query.message.edit_reply_markup(None)
                 await query.message.reply_text("✅ درخواست نمایندگی تایید شد.")
