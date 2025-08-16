@@ -903,6 +903,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = state.split("_")
             coupon_code = parts[3]
             discount_percent = int(parts[4])
+            
+            # اصلاح شده: دریافت هم آیدی عددی و هم یوزرنیم
             if text.startswith("@"):
                 username = text[1:]  # Remove the @ symbol
                 try:
@@ -933,18 +935,57 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         user_states.pop(user_id, None)
                     else:
                         await update.message.reply_text(
-                            "⚠️ کاربر با این آیدی یافت نشد. لطفا آیدی را با فرمت @username وارد کنید.",
+                            "⚠️ کاربر با این آیدی یافت نشد. لطفا آیدی را با فرمت @username یا عددی وارد کنید.",
                             reply_markup=get_back_keyboard()
                         )
                 except Exception as e:
-                    logging.error(f"Error processing user_id for coupon {coupon_code}: {e}")
+                    logging.error(f"Error processing username {username} for coupon {coupon_code}: {e}")
+                    await update.message.reply_text(
+                        "⚠️ خطایی در پردازش آیدی رخ داد. لطفا دوباره تلاش کنید.",
+                        reply_markup=get_back_keyboard()
+                    )
+            elif text.isdigit():
+                try:
+                    target_user_id = int(text)
+                    user = await db_execute(
+                        "SELECT user_id, is_agent FROM users WHERE user_id = %s",
+                        (target_user_id,), fetchone=True
+                    )
+                    if user:
+                        target_user_id, is_agent = user
+                        if is_agent:
+                            await update.message.reply_text(
+                                "⚠️ این کاربر نماینده است و نمی‌تواند کد تخفیف دریافت کند.",
+                                reply_markup=get_main_keyboard()
+                            )
+                            user_states.pop(user_id, None)
+                            return
+                        await create_coupon(coupon_code, discount_percent, target_user_id)
+                        await context.bot.send_message(
+                            chat_id=target_user_id,
+                            text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
+                            parse_mode="Markdown"
+                        )
+                        await update.message.reply_text(
+                            f"✅ کد تخفیف `{coupon_code}` برای کاربر با آیدی {target_user_id} ارسال شد.",
+                            reply_markup=get_main_keyboard(),
+                            parse_mode="Markdown"
+                        )
+                        user_states.pop(user_id, None)
+                    else:
+                        await update.message.reply_text(
+                            "⚠️ کاربر با این آیدی یافت نشد. لطفا آیدی را با فرمت @username یا عددی وارد کنید.",
+                            reply_markup=get_back_keyboard()
+                        )
+                except Exception as e:
+                    logging.error(f"Error processing user_id {text} for coupon {coupon_code}: {e}")
                     await update.message.reply_text(
                         "⚠️ خطایی در پردازش آیدی رخ داد. لطفا دوباره تلاش کنید.",
                         reply_markup=get_back_keyboard()
                     )
             else:
                 await update.message.reply_text(
-                    "⚠️ لطفا آیدی را با فرمت @username وارد کنید.",
+                    "⚠️ لطفا آیدی را با فرمت @username یا عددی وارد کنید.",
                     reply_markup=get_back_keyboard()
                 )
             return
