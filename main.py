@@ -130,7 +130,7 @@ CREATE_COUPONS_SQL = """
 CREATE TABLE IF NOT EXISTS coupons (
     code TEXT PRIMARY KEY,
     discount_percent INTEGER,
-    user_id BIGINT, -- NULL for coupons usable by all non-agents
+    user_id BIGINT,
     is_used BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
@@ -905,32 +905,48 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             discount_percent = int(parts[4])
             if text.startswith("@"):
                 username = text[1:]  # Remove the @ symbol
-                user = await db_execute(
-                    "SELECT user_id, is_agent FROM users WHERE lower(username) = lower(%s)",
-                    (username,), fetchone=True
-                )
-                if user:
-                    target_user_id, is_agent = user
-                    if is_agent:
-                        await update.message.reply_text("⚠️ این کاربر نماینده است و نمی‌تواند کد تخفیف دریافت کند.", reply_markup=get_main_keyboard())
+                try:
+                    user = await db_execute(
+                        "SELECT user_id, is_agent FROM users WHERE lower(username) = lower(%s)",
+                        (username,), fetchone=True
+                    )
+                    if user:
+                        target_user_id, is_agent = user
+                        if is_agent:
+                            await update.message.reply_text(
+                                "⚠️ این کاربر نماینده است و نمی‌تواند کد تخفیف دریافت کند.",
+                                reply_markup=get_main_keyboard()
+                            )
+                            user_states.pop(user_id, None)
+                            return
+                        await create_coupon(coupon_code, discount_percent, target_user_id)
+                        await context.bot.send_message(
+                            chat_id=target_user_id,
+                            text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
+                            parse_mode="Markdown"
+                        )
+                        await update.message.reply_text(
+                            f"✅ کد تخفیف `{coupon_code}` برای کاربر @{username} ارسال شد.",
+                            reply_markup=get_main_keyboard(),
+                            parse_mode="Markdown"
+                        )
                         user_states.pop(user_id, None)
-                        return
-                    await create_coupon(coupon_code, discount_percent, target_user_id)
-                    await context.bot.send_message(
-                        chat_id=target_user_id,
-                        text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
-                        parse_mode="Markdown"
-                    )
+                    else:
+                        await update.message.reply_text(
+                            "⚠️ کاربر با این آیدی یافت نشد. لطفا آیدی را با فرمت @username وارد کنید.",
+                            reply_markup=get_back_keyboard()
+                        )
+                except Exception as e:
+                    logging.error(f"Error processing user_id for coupon {coupon_code}: {e}")
                     await update.message.reply_text(
-                        f"✅ کد تخفیف `{coupon_code}` برای کاربر @{username} ارسال شد.",
-                        reply_markup=get_main_keyboard(),
-                        parse_mode="Markdown"
+                        "⚠️ خطایی در پردازش آیدی رخ داد. لطفا دوباره تلاش کنید.",
+                        reply_markup=get_back_keyboard()
                     )
-                    user_states.pop(user_id, None)
-                else:
-                    await update.message.reply_text("⚠️ کاربر با این آیدی یافت نشد. لطفا آیدی را با فرمت @username وارد کنید.", reply_markup=get_back_keyboard())
             else:
-                await update.message.reply_text("⚠️ لطفا آیدی را با فرمت @username وارد کنید.", reply_markup=get_back_keyboard())
+                await update.message.reply_text(
+                    "⚠️ لطفا آیدی را با فرمت @username وارد کنید.",
+                    reply_markup=get_back_keyboard()
+                )
             return
         elif state and state.startswith("awaiting_coupon_percent_") and user_id == ADMIN_ID:
             parts = state.split("_")
