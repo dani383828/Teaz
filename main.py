@@ -889,8 +889,38 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_states.pop(user_id, None)
                 return
             elif text == "👤 برای یک نفر":
-                user_states[user_id] = f"awaiting_coupon_user_id_{coupon_code}_{discount_percent}"
-                await update.message.reply_text("🆔 لطفا شماره تلفن شخص را وارد کنید (مثال: 989389605222):", reply_markup=get_back_keyboard())
+                target_user_id = 6056483071  # کاربر مشخص‌شده
+                user = await db_execute(
+                    "SELECT user_id, is_agent FROM users WHERE user_id = %s",
+                    (target_user_id,), fetchone=True
+                )
+                if user:
+                    _, is_agent = user
+                    if is_agent:
+                        await update.message.reply_text(
+                            "⚠️ این کاربر نماینده است و نمی‌تواند کد تخفیف دریافت کند.",
+                            reply_markup=get_main_keyboard()
+                        )
+                        user_states.pop(user_id, None)
+                        return
+                    await create_coupon(coupon_code, discount_percent, target_user_id)
+                    await context.bot.send_message(
+                        chat_id=target_user_id,
+                        text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
+                        parse_mode="Markdown"
+                    )
+                    await update.message.reply_text(
+                        f"✅ کد تخفیف `{coupon_code}` برای کاربر با ID {target_user_id} ارسال شد.",
+                        reply_markup=get_main_keyboard(),
+                        parse_mode="Markdown"
+                    )
+                    user_states.pop(user_id, None)
+                else:
+                    await update.message.reply_text(
+                        f"⚠️ کاربری با ID {target_user_id} یافت نشد.",
+                        reply_markup=get_main_keyboard()
+                    )
+                    user_states.pop(user_id, None)
                 return
             elif text == "🎯 درصد خاصی از کاربران":
                 user_states[user_id] = f"awaiting_coupon_percent_{coupon_code}_{discount_percent}"
@@ -899,55 +929,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("⚠️ لطفا یکی از گزینه‌های بالا را انتخاب کنید.", reply_markup=get_coupon_recipient_keyboard())
                 return
-        elif state and state.startswith("awaiting_coupon_user_id_") and user_id == ADMIN_ID:
-            parts = state.split("_")
-            coupon_code = parts[3]
-            discount_percent = int(parts[4])
-            phone_number = text.strip()
-            if phone_number.isdigit():
-                try:
-                    user = await db_execute(
-                        "SELECT user_id, is_agent FROM users WHERE phone = %s",
-                        (phone_number,), fetchone=True
-                    )
-                    if user:
-                        target_user_id, is_agent = user
-                        if is_agent:
-                            await update.message.reply_text(
-                                "⚠️ این کاربر نماینده است و نمی‌تواند کد تخفیف دریافت کند.",
-                                reply_markup=get_main_keyboard()
-                            )
-                            user_states.pop(user_id, None)
-                            return
-                        await create_coupon(coupon_code, discount_percent, target_user_id)
-                        await context.bot.send_message(
-                            chat_id=target_user_id,
-                            text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
-                            parse_mode="Markdown"
-                        )
-                        await update.message.reply_text(
-                            f"✅ کد تخفیف `{coupon_code}` برای کاربر با شماره {phone_number} ارسال شد.",
-                            reply_markup=get_main_keyboard(),
-                            parse_mode="Markdown"
-                        )
-                        user_states.pop(user_id, None)
-                    else:
-                        await update.message.reply_text(
-                            "⚠️ کاربری با این شماره تلفن یافت نشد. لطفا شماره را با فرمت صحیح وارد کنید (مثال: 989389605222).",
-                            reply_markup=get_back_keyboard()
-                        )
-                except Exception as e:
-                    logging.error(f"Error processing phone number for coupon {coupon_code}: {e}")
-                    await update.message.reply_text(
-                        "⚠️ خطایی در پردازش شماره رخ داد. لطفا دوباره تلاش کنید.",
-                        reply_markup=get_back_keyboard()
-                    )
-            else:
-                await update.message.reply_text(
-                    "⚠️ لطفا شماره تلفن را با فرمت صحیح وارد کنید (مثال: 989389605222).",
-                    reply_markup=get_back_keyboard()
-                )
-            return
         elif state and state.startswith("awaiting_coupon_percent_") and user_id == ADMIN_ID:
             parts = state.split("_")
             coupon_code = parts[3]
