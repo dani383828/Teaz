@@ -906,7 +906,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if text.startswith("@"):
                 username = text[1:]  # Remove the @ symbol
                 user = await db_execute(
-                    "SELECT user_id, is_agent FROM users WHERE username = %s",
+                    "SELECT user_id, is_agent FROM users WHERE lower(username) = lower(%s)",
                     (username,), fetchone=True
                 )
                 if user:
@@ -928,7 +928,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     user_states.pop(user_id, None)
                 else:
-                    await update.message.reply_text("⚠️ کاربر با این آیدی یافت نشد.", reply_markup=get_back_keyboard())
+                    await update.message.reply_text("⚠️ کاربر با این آیدی یافت نشد. لطفا آیدی را با فرمت @username وارد کنید.", reply_markup=get_back_keyboard())
             else:
                 await update.message.reply_text("⚠️ لطفا آیدی را با فرمت @username وارد کنید.", reply_markup=get_back_keyboard())
             return
@@ -965,10 +965,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = state.split("_")
             amount = int(parts[3])
             plan = "_".join(parts[4:])
+            if text == "ادامه":
+                user_states[user_id] = f"awaiting_payment_method_{amount}_{plan}"
+                await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
+                return
             coupon_code = text.strip()
             discount_percent, error = await validate_coupon(coupon_code, user_id)
             if error:
-                await update.message.reply_text(f"⚠️ {error}", reply_markup=get_back_keyboard())
+                await update.message.reply_text(
+                    f"⚠️ {error}\nلطفا کد معتبر وارد کنید یا برای ادامه روی 'ادامه' کلیک کنید:",
+                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
+                )
                 return
             discounted_amount = int(amount * (1 - discount_percent / 100))
             user_states[user_id] = f"awaiting_payment_method_{discounted_amount}_{plan}_{coupon_code}"
@@ -1047,30 +1054,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             user_states[user_id] = f"awaiting_payment_method_{amount}_{text}"
             await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
-        return
-
-    if user_states.get(user_id, "").startswith("awaiting_coupon_code_"):
-        parts = user_states[user_id].split("_")
-        amount = int(parts[3])
-        plan = "_".join(parts[4:])
-        if text == "ادامه":
-            user_states[user_id] = f"awaiting_payment_method_{amount}_{plan}"
-            await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
-            return
-        coupon_code = text.strip()
-        discount_percent, error = await validate_coupon(coupon_code, user_id)
-        if error:
-            await update.message.reply_text(
-                f"⚠️ {error}\nلطفا کد معتبر وارد کنید یا برای ادامه روی 'ادامه' کلیک کنید:",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
-            )
-            return
-        discounted_amount = int(amount * (1 - discount_percent / 100))
-        user_states[user_id] = f"awaiting_payment_method_{discounted_amount}_{plan}_{coupon_code}"
-        await update.message.reply_text(
-            f"✅ کد تخفیف اعمال شد! مبلغ با {discount_percent}% تخفیف: {discounted_amount} تومان\nروش خرید را انتخاب کنید:",
-            reply_markup=get_payment_method_keyboard()
-        )
         return
 
     if user_states.get(user_id, "").startswith("awaiting_payment_method_"):
