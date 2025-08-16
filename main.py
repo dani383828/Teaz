@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS coupons (
     user_id BIGINT,
     is_used BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP
+    expiry_date TIMESTAMP GENERATED ALWAYS AS (created_at + INTERVAL '3 days') STORED
 )
 """
 MIGRATE_SUBSCRIPTIONS_SQL = """
@@ -432,12 +432,11 @@ async def send_long_message(chat_id, text, context, reply_markup=None, parse_mod
 # ---------- توابع DB برای کوپن‌ها ----------
 async def create_coupon(code, discount_percent, user_id=None):
     try:
-        expires_at = datetime.now() + timedelta(days=3)
         await db_execute(
-            "INSERT INTO coupons (code, discount_percent, user_id, is_used, expires_at) VALUES (%s, %s, %s, FALSE, %s)",
-            (code, discount_percent, user_id, expires_at)
+            "INSERT INTO coupons (code, discount_percent, user_id, is_used) VALUES (%s, %s, %s, FALSE)",
+            (code, discount_percent, user_id)
         )
-        logging.info(f"Coupon {code} created with {discount_percent}% discount for user_id {user_id or 'all'}, expires at {expires_at}")
+        logging.info(f"Coupon {code} created with {discount_percent}% discount for user_id {user_id or 'all'}")
     except Exception as e:
         logging.error(f"Error creating coupon {code}: {e}")
         raise
@@ -445,18 +444,18 @@ async def create_coupon(code, discount_percent, user_id=None):
 async def validate_coupon(code, user_id):
     try:
         row = await db_execute(
-            "SELECT discount_percent, user_id, is_used, expires_at FROM coupons WHERE code = %s",
+            "SELECT discount_percent, user_id, is_used, expiry_date FROM coupons WHERE code = %s",
             (code,), fetchone=True
         )
         if not row:
             return None, "کد تخفیف نامعتبر است."
-        discount_percent, coupon_user_id, is_used, expires_at = row
+        discount_percent, coupon_user_id, is_used, expiry_date = row
         if is_used:
             return None, "این کد تخفیف قبلاً استفاده شده است."
+        if datetime.now() > expiry_date:
+            return None, "این کد تخفیف منقضی شده است."
         if coupon_user_id is not None and coupon_user_id != user_id:
             return None, "این کد تخفیف برای شما نیست."
-        if expires_at and datetime.now() > expires_at:
-            return None, "این کد تخفیف منقضی شده است."
         if await is_user_agent(user_id):
             return None, "نمایندگان نمی‌توانند از کد تخفیف استفاده کنند."
         return discount_percent, None
@@ -888,12 +887,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         user_states.pop(user_id, None)
                         return
                     sent_count = 0
-                    expires_at = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d %H:%M')
                     for user in users:
                         try:
                             await context.bot.send_message(
                                 chat_id=user[0],
-                                text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است و تا تاریخ {expires_at} معتبر است.",
+                                text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\n⏳ این کد فقط تا ۳ روز اعتبار دارد.\nفقط یک بار قابل استفاده است.",
                                 parse_mode="Markdown"
                             )
                             sent_count += 1
@@ -929,11 +927,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         user_states.pop(user_id, None)
                         return
-                    expires_at = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d %H:%M')
                     await create_coupon(coupon_code, discount_percent, target_user_id)
                     await context.bot.send_message(
                         chat_id=target_user_id,
-                        text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است و تا تاریخ {expires_at} معتبر است.",
+                        text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\n⏳ این کد فقط تا ۳ روز اعتبار دارد.\nفقط یک بار قابل استفاده است.",
                         parse_mode="Markdown"
                     )
                     await update.message.reply_text(
@@ -975,14 +972,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         total_users = len(users)
                         num_users = max(1, round(total_users * (percent / 100)))
                         selected_users = random.sample(users, min(num_users, total_users))
-                        expires_at = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d %H:%M')
                         await create_coupon(coupon_code, discount_percent)
                         sent_count = 0
                         for user in selected_users:
                             try:
                                 await context.bot.send_message(
                                     chat_id=user[0],
-                                    text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است و تا تاریخ {expires_at} معتبر است.",
+                                    text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\n⏳ این کد فقط تا ۳ روز اعتبار دارد.\nفقط یک بار قابل استفاده است.",
                                     parse_mode="Markdown"
                                 )
                                 sent_count += 1
@@ -1010,7 +1006,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif state and state.startswith("awaiting_coupon_code_"):
             parts = state.split("_")
             amount = int(parts[3])
-            plan = "_".join(parts[4:])
+            plan = "_".join(parts[4:]) if len(parts) <= 5 else "_".join(parts[4:-1])
+            coupon_code = parts[-1] if len(parts) > 5 else None
+            
             if text == "ادامه":
                 user_states[user_id] = f"awaiting_payment_method_{amount}_{plan}"
                 await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
