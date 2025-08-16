@@ -890,7 +890,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             elif text == "👤 برای یک نفر":
                 user_states[user_id] = f"awaiting_coupon_user_id_{coupon_code}_{discount_percent}"
-                await update.message.reply_text("🆔 لطفا آیدی کاربر را وارد کنید:", reply_markup=get_back_keyboard())
+                await update.message.reply_text("🆔 لطفا آیدی کاربر را با فرمت @username وارد کنید:", reply_markup=get_back_keyboard())
                 return
             elif text == "🎯 درصد خاصی از کاربران":
                 user_states[user_id] = f"awaiting_coupon_percent_{coupon_code}_{discount_percent}"
@@ -903,15 +903,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = state.split("_")
             coupon_code = parts[3]
             discount_percent = int(parts[4])
-            if text.isdigit():
-                target_user_id = int(text)
-                is_agent = await is_user_agent(target_user_id)
-                if is_agent:
-                    await update.message.reply_text("⚠️ این کاربر نماینده است و نمی‌تواند کد تخفیف دریافت کند.", reply_markup=get_main_keyboard())
-                    user_states.pop(user_id, None)
-                    return
-                user_exists = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
-                if user_exists:
+            if text.startswith("@"):
+                username = text[1:]  # Remove the @ symbol
+                user = await db_execute(
+                    "SELECT user_id, is_agent FROM users WHERE username = %s",
+                    (username,), fetchone=True
+                )
+                if user:
+                    target_user_id, is_agent = user
+                    if is_agent:
+                        await update.message.reply_text("⚠️ این کاربر نماینده است و نمی‌تواند کد تخفیف دریافت کند.", reply_markup=get_main_keyboard())
+                        user_states.pop(user_id, None)
+                        return
                     await create_coupon(coupon_code, discount_percent, target_user_id)
                     await context.bot.send_message(
                         chat_id=target_user_id,
@@ -919,7 +922,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown"
                     )
                     await update.message.reply_text(
-                        f"✅ کد تخفیف `{coupon_code}` برای کاربر {target_user_id} ارسال شد.",
+                        f"✅ کد تخفیف `{coupon_code}` برای کاربر @{username} ارسال شد.",
                         reply_markup=get_main_keyboard(),
                         parse_mode="Markdown"
                     )
@@ -927,7 +930,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await update.message.reply_text("⚠️ کاربر با این آیدی یافت نشد.", reply_markup=get_back_keyboard())
             else:
-                await update.message.reply_text("⚠️ لطفا آیدی عددی معتبر وارد کنید.", reply_markup=get_back_keyboard())
+                await update.message.reply_text("⚠️ لطفا آیدی را با فرمت @username وارد کنید.", reply_markup=get_back_keyboard())
             return
         elif state and state.startswith("awaiting_coupon_percent_") and user_id == ADMIN_ID:
             parts = state.split("_")
@@ -1013,59 +1016,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💳 خرید اشتراک":
         is_agent = await is_user_agent(user_id)
-        if not is_agent:
-            await update.message.reply_text(
-                "💵 اگر کد تخفیف دارید، وارد کنید. در غیر این صورت برای ادامه روی 'ادامه' کلیک کنید:",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
-            )
-            user_states[user_id] = "awaiting_coupon_or_continue"
-        else:
-            await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent=True))
-            user_states.pop(user_id, None)
+        await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent))
+        user_states.pop(user_id, None)
         return
-
-    if user_states.get(user_id) == "awaiting_coupon_or_continue":
-        if text == "ادامه":
-            await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent=False))
-            user_states.pop(user_id, None)
-        else:
-            discount_percent, error = await validate_coupon(text, user_id)
-            if error:
-                await update.message.reply_text(
-                    f"⚠️ {error}\nلطفا کد معتبر وارد کنید یا برای ادامه روی 'ادامه' کلیک کنید:",
-                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
-                )
-            else:
-                user_states[user_id] = f"awaiting_plan_with_coupon_{text}"
-                await update.message.reply_text(
-                    f"✅ کد تخفیف با {discount_percent}% تخفیف اعمال شد.\nپلن را انتخاب کنید:",
-                    reply_markup=get_subscription_keyboard(is_agent=False)
-                )
-        return
-
-    if user_states.get(user_id, "").startswith("awaiting_plan_with_coupon_"):
-        coupon_code = user_states[user_id].split("_")[-1]
-        if text in [
-            "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود", "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود", "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود"
-        ]:
-            mapping = {
-                "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود": (90000, 0),
-                "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود": (250000, 1),
-                "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": (450000, 2)
-            }
-            amount, plan_index = mapping.get(text, (0, -1))
-            if plan_index == -1:
-                await update.message.reply_text("⚠️ خطا در انتخاب پلن. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-                user_states.pop(user_id, None)
-                return
-            discount_percent, _ = await validate_coupon(coupon_code, user_id)
-            discounted_amount = int(amount * (1 - discount_percent / 100))
-            user_states[user_id] = f"awaiting_payment_method_{discounted_amount}_{text}_{coupon_code}"
-            await update.message.reply_text(
-                f"✅ مبلغ با {discount_percent}% تخفیف: {discounted_amount} تومان\nروش خرید را انتخاب کنید:",
-                reply_markup=get_payment_method_keyboard()
-            )
-            return
 
     if text in [
         "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود", "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود", "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود",
@@ -1084,10 +1037,40 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ خطا در انتخاب پلن. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
             return
-        
-        user_states[user_id] = f"awaiting_payment_method_{amount}_{text}"
-        logging.info(f"Set user state for user_id {user_id}: {user_states[user_id]}")
-        await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
+        is_agent = await is_user_agent(user_id)
+        if not is_agent:
+            await update.message.reply_text(
+                f"💵 اگر کد تخفیف دارید، وارد کنید. در غیر این صورت برای ادامه روی 'ادامه' کلیک کنید:",
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
+            )
+            user_states[user_id] = f"awaiting_coupon_code_{amount}_{text}"
+        else:
+            user_states[user_id] = f"awaiting_payment_method_{amount}_{text}"
+            await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
+        return
+
+    if user_states.get(user_id, "").startswith("awaiting_coupon_code_"):
+        parts = user_states[user_id].split("_")
+        amount = int(parts[3])
+        plan = "_".join(parts[4:])
+        if text == "ادامه":
+            user_states[user_id] = f"awaiting_payment_method_{amount}_{plan}"
+            await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
+            return
+        coupon_code = text.strip()
+        discount_percent, error = await validate_coupon(coupon_code, user_id)
+        if error:
+            await update.message.reply_text(
+                f"⚠️ {error}\nلطفا کد معتبر وارد کنید یا برای ادامه روی 'ادامه' کلیک کنید:",
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
+            )
+            return
+        discounted_amount = int(amount * (1 - discount_percent / 100))
+        user_states[user_id] = f"awaiting_payment_method_{discounted_amount}_{plan}_{coupon_code}"
+        await update.message.reply_text(
+            f"✅ کد تخفیف اعمال شد! مبلغ با {discount_percent}% تخفیف: {discounted_amount} تومان\nروش خرید را انتخاب کنید:",
+            reply_markup=get_payment_method_keyboard()
+        )
         return
 
     if user_states.get(user_id, "").startswith("awaiting_payment_method_"):
