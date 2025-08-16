@@ -890,7 +890,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             elif text == "👤 برای یک نفر":
                 user_states[user_id] = f"awaiting_coupon_user_id_{coupon_code}_{discount_percent}"
-                await update.message.reply_text("🆔 لطفا آیدی کاربر را با فرمت @username وارد کنید:", reply_markup=get_back_keyboard())
+                await update.message.reply_text("🆔 لطفا شماره تلفن شخص را وارد کنید (مثال: 989389605222):", reply_markup=get_back_keyboard())
                 return
             elif text == "🎯 درصد خاصی از کاربران":
                 user_states[user_id] = f"awaiting_coupon_percent_{coupon_code}_{discount_percent}"
@@ -903,12 +903,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = state.split("_")
             coupon_code = parts[3]
             discount_percent = int(parts[4])
-            if text.startswith("@"):
-                username = text[1:]  # Remove the @ symbol
+            phone_number = text.strip()
+            if phone_number.isdigit():
                 try:
                     user = await db_execute(
-                        "SELECT user_id, is_agent FROM users WHERE lower(username) = lower(%s)",
-                        (username,), fetchone=True
+                        "SELECT user_id, is_agent FROM users WHERE phone = %s",
+                        (phone_number,), fetchone=True
                     )
                     if user:
                         target_user_id, is_agent = user
@@ -926,25 +926,25 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             parse_mode="Markdown"
                         )
                         await update.message.reply_text(
-                            f"✅ کد تخفیف `{coupon_code}` برای کاربر @{username} ارسال شد.",
+                            f"✅ کد تخفیف `{coupon_code}` برای کاربر با شماره {phone_number} ارسال شد.",
                             reply_markup=get_main_keyboard(),
                             parse_mode="Markdown"
                         )
                         user_states.pop(user_id, None)
                     else:
                         await update.message.reply_text(
-                            "⚠️ کاربر با این آیدی یافت نشد. لطفا آیدی را با فرمت @username وارد کنید.",
+                            "⚠️ کاربری با این شماره تلفن یافت نشد. لطفا شماره را با فرمت صحیح وارد کنید (مثال: 989389605222).",
                             reply_markup=get_back_keyboard()
                         )
                 except Exception as e:
-                    logging.error(f"Error processing user_id for coupon {coupon_code}: {e}")
+                    logging.error(f"Error processing phone number for coupon {coupon_code}: {e}")
                     await update.message.reply_text(
-                        "⚠️ خطایی در پردازش آیدی رخ داد. لطفا دوباره تلاش کنید.",
+                        "⚠️ خطایی در پردازش شماره رخ داد. لطفا دوباره تلاش کنید.",
                         reply_markup=get_back_keyboard()
                     )
             else:
                 await update.message.reply_text(
-                    "⚠️ لطفا آیدی را با فرمت @username وارد کنید.",
+                    "⚠️ لطفا شماره تلفن را با فرمت صحیح وارد کنید (مثال: 989389605222).",
                     reply_markup=get_back_keyboard()
                 )
             return
@@ -1391,7 +1391,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await update_payment_status(payment_id, "approved")
             if ptype == "increase_balance":
                 await add_balance(user_id, amount)
-                await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
+                await context.bot.send_message(user_id, f CLOUDFRONT_URL="https://d1l2t1dfrf2m.cloudfront.net" f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
                 await query.message.edit_reply_markup(None)
                 await query.message.reply_text("✅ پرداخت تایید شد.")
             elif ptype == "buy_subscription":
