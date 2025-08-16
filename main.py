@@ -873,20 +873,41 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             discount_percent = int(parts[4])
             
             if text == "📢 برای همه":
-                await create_coupon(coupon_code, discount_percent)
-                users = await db_execute("SELECT user_id FROM users WHERE is_agent = FALSE", fetch=True)
-                for user in users:
-                    await context.bot.send_message(
-                        chat_id=user[0],
-                        text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
+                try:
+                    await create_coupon(coupon_code, discount_percent)
+                    users = await db_execute("SELECT user_id FROM users WHERE is_agent = FALSE", fetch=True)
+                    if not users:
+                        await update.message.reply_text(
+                            "⚠️ هیچ کاربری (غیر از نمایندگان) یافت نشد.",
+                            reply_markup=get_main_keyboard()
+                        )
+                        user_states.pop(user_id, None)
+                        return
+                    sent_count = 0
+                    for user in users:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=user[0],
+                                text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
+                                parse_mode="Markdown"
+                            )
+                            sent_count += 1
+                        except Exception as e:
+                            logging.error(f"Error sending coupon to user_id {user[0]}: {e}")
+                            continue
+                    await update.message.reply_text(
+                        f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر (غیر از نمایندگان) ارسال شد.",
+                        reply_markup=get_main_keyboard(),
                         parse_mode="Markdown"
                     )
-                await update.message.reply_text(
-                    f"✅ کد تخفیف `{coupon_code}` برای همه کاربران (غیر از نمایندگان) ارسال شد.",
-                    reply_markup=get_main_keyboard(),
-                    parse_mode="Markdown"
-                )
-                user_states.pop(user_id, None)
+                    user_states.pop(user_id, None)
+                except Exception as e:
+                    logging.error(f"Error sending coupons to all users: {e}")
+                    await update.message.reply_text(
+                        "⚠️ خطا در ارسال کد تخفیف برای همه کاربران.",
+                        reply_markup=get_main_keyboard()
+                    )
+                    user_states.pop(user_id, None)
                 return
             elif text == "👤 برای یک نفر":
                 target_user_id = 6056483071  # کاربر مشخص‌شده
@@ -936,23 +957,44 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if text.isdigit():
                 percent = int(text)
                 if 0 < percent <= 100:
-                    users = await db_execute("SELECT user_id FROM users WHERE is_agent = FALSE", fetch=True)
-                    total_users = len(users)
-                    num_users = max(1, round(total_users * (percent / 100)))
-                    selected_users = random.sample(users, min(num_users, total_users))
-                    await create_coupon(coupon_code, discount_percent)
-                    for user in selected_users:
-                        await context.bot.send_message(
-                            chat_id=user[0],
-                            text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
+                    try:
+                        users = await db_execute("SELECT user_id FROM users WHERE is_agent = FALSE", fetch=True)
+                        if not users:
+                            await update.message.reply_text(
+                                "⚠️ هیچ کاربری (غیر از نمایندگان) یافت نشد.",
+                                reply_markup=get_main_keyboard()
+                            )
+                            user_states.pop(user_id, None)
+                            return
+                        total_users = len(users)
+                        num_users = max(1, round(total_users * (percent / 100)))
+                        selected_users = random.sample(users, min(num_users, total_users))
+                        await create_coupon(coupon_code, discount_percent)
+                        sent_count = 0
+                        for user in selected_users:
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=user[0],
+                                    text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\nفقط یک بار قابل استفاده است.",
+                                    parse_mode="Markdown"
+                                )
+                                sent_count += 1
+                            except Exception as e:
+                                logging.error(f"Error sending coupon to user_id {user[0]}: {e}")
+                                continue
+                        await update.message.reply_text(
+                            f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر ({percent}% از کاربران غیر نماینده) ارسال شد.",
+                            reply_markup=get_main_keyboard(),
                             parse_mode="Markdown"
                         )
-                    await update.message.reply_text(
-                        f"✅ کد تخفیف `{coupon_code}` برای {percent}% از کاربران (غیر از نمایندگان) ارسال شد.",
-                        reply_markup=get_main_keyboard(),
-                        parse_mode="Markdown"
-                    )
-                    user_states.pop(user_id, None)
+                        user_states.pop(user_id, None)
+                    except Exception as e:
+                        logging.error(f"Error sending coupons to {percent}% of users: {e}")
+                        await update.message.reply_text(
+                            "⚠️ خطا در ارسال کد تخفیف برای درصد مشخصی از کاربران.",
+                            reply_markup=get_main_keyboard()
+                        )
+                        user_states.pop(user_id, None)
                 else:
                     await update.message.reply_text("⚠️ درصد باید بین 1 تا 100 باشد.", reply_markup=get_back_keyboard())
             else:
