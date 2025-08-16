@@ -1409,8 +1409,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
     await query.answer()
 
-    ifнциклоп
-data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
+    if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
         if update.effective_user.id != ADMIN_ID:
             await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
             return
