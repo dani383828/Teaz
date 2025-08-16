@@ -1391,7 +1391,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await update_payment_status(payment_id, "approved")
             if ptype == "increase_balance":
                 await add_balance(user_id, amount)
-                await context.bot.send_message(user_id, f CLOUDFRONT_URL="https://d1l2t1dfrf2m.cloudfront.net" f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
+                await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
                 await query.message.edit_reply_markup(None)
                 await query.message.reply_text("✅ پرداخت تایید شد.")
             elif ptype == "buy_subscription":
