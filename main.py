@@ -181,7 +181,7 @@ async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
     
-    await update.message.reply_text("📢 متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
+    await update.message.reply_text("📢 لطفا متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
     user_states[update.effective_user.id] = "awaiting_notification_message"
 
 # ---------- دستور جدید برای نمایش شماره‌ها ----------
@@ -592,7 +592,7 @@ async def update_subscription_config(payment_id, config):
     try:
         await db_execute(
             "UPDATE subscriptions SET config = %s, status = 'active' WHERE payment_id = %s",
-            (config, payment_id)
+            (_legend, payment_id)
         )
         logging.info(f"Subscription config updated and set to active for payment_id {payment_id}")
     except Exception as e:
@@ -709,7 +709,7 @@ async def set_bot_commands():
             BotCommand(command="/stats", description="آمار ربات (ادمین)"),
             BotCommand(command="/numbers", description="نمایش شماره‌های کاربران (ادمین)"),
             BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)"),
-            BotCommand(command="/Notification", description="ارسال اطلاع‌رسانی به همه کاربران (ادمین)")
+            BotCommand(command="/notification", description="ارسال اطلاع‌رسانی به همه کاربران (ادمین)")
         ]
         await application.bot.set_my_commands(public_commands)
         await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
@@ -805,6 +805,42 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states.pop(user_id, None)
         return
 
+    if user_states.get(user_id) == "awaiting_notification_message" and user_id == ADMIN_ID:
+        try:
+            users = await db_execute("SELECT user_id FROM users", fetch=True)
+            if not users:
+                await update.message.reply_text(
+                    "⚠️ هیچ کاربری یافت نشد.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+                return
+            sent_count = 0
+            for user in users:
+                try:
+                    await context.bot.send_message(
+                        chat_id=user[0],
+                        text=text,
+                        parse_mode="Markdown"
+                    )
+                    sent_count += 1
+                except Exception as e:
+                    logging.error(f"Error sending notification to user_id {user[0]}: {e}")
+                    continue
+            await update.message.reply_text(
+                f"✅ اطلاع‌رسانی به {sent_count} کاربر ارسال شد.",
+                reply_markup=get_main_keyboard()
+            )
+            user_states.pop(user_id, None)
+        except Exception as e:
+            logging.error(f"Error sending notifications: {e}")
+            await update.message.reply_text(
+                "⚠️ خطا در ارسال اطلاع‌رسانی.",
+                reply_markup=get_main_keyboard()
+            )
+            user_states.pop(user_id, None)
+        return
+
     if update.message.photo or update.message.document or update.message.text:
         state = user_states.get(user_id)
         if state and (
@@ -864,41 +900,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.")
                     return
-        elif state == "awaiting_notification_message" and user_id == ADMIN_ID:
-            try:
-                users = await db_execute("SELECT user_id FROM users", fetch=True)
-                if not users:
-                    await update.message.reply_text(
-                        "⚠️ هیچ کاربری یافت نشد.",
-                        reply_markup=get_main_keyboard()
-                    )
-                    user_states.pop(user_id, None)
-                    return
-                sent_count = 0
-                for user in users:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=user[0],
-                            text=text,
-                            parse_mode="Markdown"
-                        )
-                        sent_count += 1
-                    except Exception as e:
-                        logging.error(f"Error sending notification to user_id {user[0]}: {e}")
-                        continue
-                await update.message.reply_text(
-                    f"✅ اطلاع‌رسانی به {sent_count} کاربر ارسال شد.",
-                    reply_markup=get_main_keyboard()
-                )
-                user_states.pop(user_id, None)
-            except Exception as e:
-                logging.error(f"Error sending notifications: {e}")
-                await update.message.reply_text(
-                    "⚠️ خطا در ارسال اطلاع‌رسانی.",
-                    reply_markup=get_main_keyboard()
-                )
-                user_states.pop(user_id, None)
-            return
         elif state == "awaiting_coupon_discount" and user_id == ADMIN_ID:
             if text.isdigit():
                 discount_percent = int(text)
@@ -1525,7 +1526,7 @@ application.add_handler(CommandHandler("cleardb", clear_db))
 application.add_handler(CommandHandler("stats", stats_command))
 application.add_handler(CommandHandler("numbers", numbers_command))
 application.add_handler(CommandHandler("coupon", coupon_command))
-application.add_handler(CommandHandler("Notification", notification_command))
+application.add_handler(CommandHandler("notification", notification_command))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
@@ -1535,4 +1536,11 @@ application.add_handler(CallbackQueryHandler(admin_callback_handler))
 async def telegram_webhook(request: Request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
-    await
+    await application.update_queue.put(update)
+    return {"ok": True}
+
+# ---------- lifecycle events ----------
+@app.on_event("startup")
+async def on_startup():
+    init_db_pool()
+    await create_tables()
