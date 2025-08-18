@@ -181,7 +181,7 @@ async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
     
-    await update.message.reply_text("📢 لطفا متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
+    await update.message.reply_text("📢 متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
     user_states[update.effective_user.id] = "awaiting_notification_message"
 
 # ---------- دستور جدید برای نمایش شماره‌ها ----------
@@ -592,7 +592,7 @@ async def update_subscription_config(payment_id, config):
     try:
         await db_execute(
             "UPDATE subscriptions SET config = %s, status = 'active' WHERE payment_id = %s",
-            (_legend, payment_id)
+            (config, payment_id)
         )
         logging.info(f"Subscription config updated and set to active for payment_id {payment_id}")
     except Exception as e:
@@ -805,42 +805,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states.pop(user_id, None)
         return
 
-    if user_states.get(user_id) == "awaiting_notification_message" and user_id == ADMIN_ID:
-        try:
-            users = await db_execute("SELECT user_id FROM users", fetch=True)
-            if not users:
-                await update.message.reply_text(
-                    "⚠️ هیچ کاربری یافت نشد.",
-                    reply_markup=get_main_keyboard()
-                )
-                user_states.pop(user_id, None)
-                return
-            sent_count = 0
-            for user in users:
-                try:
-                    await context.bot.send_message(
-                        chat_id=user[0],
-                        text=text,
-                        parse_mode="Markdown"
-                    )
-                    sent_count += 1
-                except Exception as e:
-                    logging.error(f"Error sending notification to user_id {user[0]}: {e}")
-                    continue
-            await update.message.reply_text(
-                f"✅ اطلاع‌رسانی به {sent_count} کاربر ارسال شد.",
-                reply_markup=get_main_keyboard()
-            )
-            user_states.pop(user_id, None)
-        except Exception as e:
-            logging.error(f"Error sending notifications: {e}")
-            await update.message.reply_text(
-                "⚠️ خطا در ارسال اطلاع‌رسانی.",
-                reply_markup=get_main_keyboard()
-            )
-            user_states.pop(user_id, None)
-        return
-
     if update.message.photo or update.message.document or update.message.text:
         state = user_states.get(user_id)
         if state and (
@@ -1048,6 +1012,41 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("⚠️ درصد باید بین 1 تا 100 باشد.", reply_markup=get_back_keyboard())
             else:
                 await update.message.reply_text("⚠️ لطفا یک عدد معتبر وارد کنید.", reply_markup=get_back_keyboard())
+            return
+        elif state == "awaiting_notification_message" and user_id == ADMIN_ID:
+            try:
+                users = await db_execute("SELECT user_id FROM users", fetch=True)
+                if not users:
+                    await update.message.reply_text(
+                        "⚠️ هیچ کاربری یافت نشد.",
+                        reply_markup=get_main_keyboard()
+                    )
+                    user_states.pop(user_id, None)
+                    return
+                sent_count = 0
+                for user in users:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=user[0],
+                            text=text,
+                            parse_mode="Markdown"
+                        )
+                        sent_count += 1
+                    except Exception as e:
+                        logging.error(f"Error sending notification to user_id {user[0]}: {e}")
+                        continue
+                await update.message.reply_text(
+                    f"✅ اطلاع‌رسانی برای {sent_count} کاربر ارسال شد.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+            except Exception as e:
+                logging.error(f"Error sending notifications to all users: {e}")
+                await update.message.reply_text(
+                    "⚠️ خطا در ارسال اطلاع‌رسانی به کاربران.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
             return
         elif state and state.startswith("awaiting_coupon_code_"):
             parts = state.split("_")
@@ -1544,3 +1543,5 @@ async def telegram_webhook(request: Request):
 async def on_startup():
     init_db_pool()
     await create_tables()
+    try:
+        await application.bot
