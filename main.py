@@ -175,14 +175,14 @@ def generate_coupon_code(length=8):
     characters = string.ascii_uppercase + string.digits
     return ''.join(random.choice(characters) for _ in range(length))
 
-# ---------- دستور جدید برای مدیریت کد تخفیف ----------
-async def coupon_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------- دستور جدید برای اطلاع‌رسانی به همه کاربران ----------
+async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
     
-    await update.message.reply_text("💵 مقدار تخفیف را به درصد وارد کنید (مثال: 20):", reply_markup=get_back_keyboard())
-    user_states[update.effective_user.id] = "awaiting_coupon_discount"
+    await update.message.reply_text("📢 متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
+    user_states[update.effective_user.id] = "awaiting_notification_message"
 
 # ---------- دستور جدید برای نمایش شماره‌ها ----------
 async def numbers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -684,6 +684,15 @@ async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
         logging.error(f"Error in debug_subscriptions: {e}")
         await update.message.reply_text(f"⚠️ خطا در بررسی اشتراک‌ها: {str(e)}")
 
+# ---------- دستور جدید برای مدیریت کد تخفیف ----------
+async def coupon_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    await update.message.reply_text("💵 مقدار تخفیف را به درصد وارد کنید (مثال: 20):", reply_markup=get_back_keyboard())
+    user_states[update.effective_user.id] = "awaiting_coupon_discount"
+
 # ---------- وضعیت کاربر در مموری ----------
 user_states = {}
 
@@ -699,7 +708,8 @@ async def set_bot_commands():
             BotCommand(command="/cleardb", description="پاک کردن دیتابیس (ادمین)"),
             BotCommand(command="/stats", description="آمار ربات (ادمین)"),
             BotCommand(command="/numbers", description="نمایش شماره‌های کاربران (ادمین)"),
-            BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)")
+            BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)"),
+            BotCommand(command="/notification", description="ارسال اطلاع‌رسانی به همه کاربران (ادمین)")
         ]
         await application.bot.set_my_commands(public_commands)
         await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
@@ -1480,6 +1490,7 @@ application.add_handler(CommandHandler("cleardb", clear_db))
 application.add_handler(CommandHandler("stats", stats_command))
 application.add_handler(CommandHandler("numbers", numbers_command))
 application.add_handler(CommandHandler("coupon", coupon_command))
+application.add_handler(CommandHandler("notification", notification_command))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
@@ -1492,30 +1503,40 @@ async def telegram_webhook(request: Request):
     await application.update_queue.put(update)
     return {"ok": True}
 
-# ---------- lifecycle events ----------
-@app.on_event("startup")
-async def on_startup():
-    init_db_pool()
-    await create_tables()
-    try:
-        await application.bot.set_webhook(url=WEBHOOK_URL)
-        logging.info("Webhook set successfully")
-    except Exception as e:
-        logging.error(f"Error setting webhook: {e}")
-    await set_bot_commands()
-    await application.initialize()
-    await application.start()
-    print("✅ Webhook set:", WEBHOOK_URL)
+# ---------- راه‌اندازی سرور و تنظیم وب‌هوک ----------
+import uvicorn
 
-@app.on_event("shutdown")
+async def on_startup():
+    try:
+        await create_tables()
+        await set_bot_commands()
+        webhook_info = await application.bot.get_webhook_info()
+        if webhook_info.url != WEBHOOK_URL:
+            await application.bot.set_webhook(url=WEBHOOK_URL)
+            logging.info(f"Webhook set to {WEBHOOK_URL}")
+        await application.initialize()
+        await application.start()
+        logging.info("Bot started and webhook set")
+    except Exception as e:
+        logging.error(f"Error during startup: {e}")
+        raise
+
 async def on_shutdown():
     try:
         await application.stop()
-        await application.shutdown()
-    finally:
         close_db_pool()
+        logging.info("Bot stopped and database pool closed")
+    except Exception as e:
+        logging.error(f"Error during shutdown: {e}")
 
-# ---------- اجرای محلی (برای debug) ----------
+@app.on_event("startup")
+async def startup_event():
+    await on_startup()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await on_shutdown()
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    init_db_pool()
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
