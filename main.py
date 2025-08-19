@@ -175,6 +175,15 @@ def generate_coupon_code(length=8):
     characters = string.ascii_uppercase + string.digits
     return ''.join(random.choice(characters) for _ in range(length))
 
+# ---------- دستور جدید برای اطلاع رسانی به همه کاربران ----------
+async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    await update.message.reply_text("📢 لطفا متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
+    user_states[update.effective_user.id] = "awaiting_notification_text"
+
 # ---------- دستور جدید برای مدیریت کد تخفیف ----------
 async def coupon_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -699,7 +708,8 @@ async def set_bot_commands():
             BotCommand(command="/cleardb", description="پاک کردن دیتابیس (ادمین)"),
             BotCommand(command="/stats", description="آمار ربات (ادمین)"),
             BotCommand(command="/numbers", description="نمایش شماره‌های کاربران (ادمین)"),
-            BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)")
+            BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)"),
+            BotCommand(command="/notification", description="ارسال اطلاعیه به همه کاربران (ادمین)")
         ]
         await application.bot.set_my_commands(public_commands)
         await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
@@ -1027,6 +1037,62 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ کد تخفیف اعمال شد! مبلغ با {discount_percent}% تخفیف: {discounted_amount} تومان\nروش خرید را انتخاب کنید:",
                 reply_markup=get_payment_method_keyboard()
             )
+            return
+        elif state == "awaiting_notification_text" and user_id == ADMIN_ID:
+            notification_text = text
+            await update.message.reply_text(
+                "📢 آیا مطمئن هستید که می‌خواهید این اطلاعیه را برای همه کاربران ارسال کنید؟",
+                reply_markup=ReplyKeyboardMarkup([
+                    [KeyboardButton("✅ بله، ارسال کن")],
+                    [KeyboardButton("❌ خیر، انصراف")]
+                ], resize_keyboard=True)
+            )
+            user_states[user_id] = f"confirm_notification_{notification_text}"
+            return
+        elif state and state.startswith("confirm_notification_") and user_id == ADMIN_ID:
+            notification_text = state.split("_", 2)[2]
+            if text == "✅ بله، ارسال کن":
+                try:
+                    users = await db_execute("SELECT user_id FROM users", fetch=True)
+                    if not users:
+                        await update.message.reply_text(
+                            "⚠️ هیچ کاربری یافت نشد.",
+                            reply_markup=get_main_keyboard()
+                        )
+                        user_states.pop(user_id, None)
+                        return
+                    
+                    sent_count = 0
+                    failed_count = 0
+                    for user in users:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=user[0],
+                                text=f"📢 اطلاعیه از مدیریت:\n\n{notification_text}"
+                            )
+                            sent_count += 1
+                        except Exception as e:
+                            logging.error(f"Error sending notification to user_id {user[0]}: {e}")
+                            failed_count += 1
+                            continue
+                    
+                    await update.message.reply_text(
+                        f"✅ اطلاعیه با موفقیت به {sent_count} کاربر ارسال شد.\n"
+                        f"❌ تعداد کاربرانی که دریافت نکردند: {failed_count}",
+                        reply_markup=get_main_keyboard()
+                    )
+                except Exception as e:
+                    logging.error(f"Error sending notifications: {e}")
+                    await update.message.reply_text(
+                        "⚠️ خطا در ارسال اطلاعیه به کاربران.",
+                        reply_markup=get_main_keyboard()
+                    )
+            else:
+                await update.message.reply_text(
+                    "❌ ارسال اطلاعیه لغو شد.",
+                    reply_markup=get_main_keyboard()
+                )
+            user_states.pop(user_id, None)
             return
 
     if text == "💰 موجودی":
@@ -1464,7 +1530,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
-    if args and len(args) > 0:
+    if args and len(args> 0):
         try:
             invited_by = int(args[0])
             if invited_by != update.effective_user.id:
@@ -1480,6 +1546,7 @@ application.add_handler(CommandHandler("cleardb", clear_db))
 application.add_handler(CommandHandler("stats", stats_command))
 application.add_handler(CommandHandler("numbers", numbers_command))
 application.add_handler(CommandHandler("coupon", coupon_command))
+application.add_handler(CommandHandler("notification", notification_command))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
