@@ -34,6 +34,8 @@ application = Application.builder().token(TOKEN).build()
 # ---------- PostgreSQL connection pool (psycopg2) ----------
 import psycopg2
 from psycopg2 import pool
+import tempfile
+import subprocess
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -174,6 +176,69 @@ async def create_tables():
 def generate_coupon_code(length=8):
     characters = string.ascii_uppercase + string.digits
     return ''.join(random.choice(characters) for _ in range(length))
+
+# ---------- دستور جدید برای بکاپ گیری از دیتابیس ----------
+async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    try:
+        await update.message.reply_text("🔄 در حال تهیه بکاپ از دیتابیس...")
+        
+        # ایجاد فایل موقت برای بکاپ
+        with tempfile.NamedTemporaryFile(suffix='.sql', delete=False) as tmp_file:
+            backup_file = tmp_file.name
+        
+        # استخراج اطلاعات اتصال از DATABASE_URL
+        import urllib.parse
+        parsed_url = urllib.parse.urlparse(DATABASE_URL)
+        db_name = parsed_url.path[1:]
+        db_user = parsed_url.username
+        db_password = parsed_url.password
+        db_host = parsed_url.hostname
+        db_port = parsed_url.port or 5432
+        
+        # اجرای دستور pg_dump برای بکاپ
+        cmd = [
+            'pg_dump',
+            '-h', db_host,
+            '-p', str(db_port),
+            '-U', db_user,
+            '-d', db_name,
+            '-f', backup_file,
+            '-F', 'p'  # فرمت plain text
+        ]
+        
+        # تنظیم محیط برای پسورد
+        env = os.environ.copy()
+        env['PGPASSWORD'] = db_password
+        
+        # اجرای دستور
+        process = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        
+        if process.returncode != 0:
+            error_msg = stderr.decode('utf-8') if stderr else "Unknown error"
+            raise Exception(f"Backup failed: {error_msg}")
+        
+        # ارسال فایل بکاپ
+        with open(backup_file, 'rb') as file:
+            await context.bot.send_document(
+                chat_id=ADMIN_ID,
+                document=file,
+                filename=f"teazvpn_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.sql",
+                caption="✅ بکاپ از دیتابیس با موفقیت تهیه شد."
+            )
+        
+        # حذف فایل موقت
+        os.unlink(backup_file)
+        
+        await update.message.reply_text("✅ بکاپ با موفقیت تهیه و ارسال شد.")
+        
+    except Exception as e:
+        logging.error(f"Error in backup command: {e}")
+        await update.message.reply_text(f"⚠️ خطا در تهیه بکاپ: {str(e)}")
 
 # ---------- دستور جدید برای اطلاع رسانی به همه کاربران ----------
 async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -709,7 +774,8 @@ async def set_bot_commands():
             BotCommand(command="/stats", description="آمار ربات (ادمین)"),
             BotCommand(command="/numbers", description="نمایش شماره‌های کاربران (ادمین)"),
             BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)"),
-            BotCommand(command="/notification", description="ارسال اطلاعیه به همه کاربران (ادمین)")
+            BotCommand(command="/notification", description="ارسال اطلاعیه به همه کاربران (ادمین)"),
+            BotCommand(command="/backup", description="تهیه بکاپ از دیتابیس (ادمین)")
         ]
         await application.bot.set_my_commands(public_commands)
         await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
@@ -1157,7 +1223,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if plan_index == -1:
             await update.message.reply_text("⚠️ خطا در انتخاب پلن. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
-            return
         is_agent = await is_user_agent(user_id)
         if not is_agent:
             await update.message.reply_text(
@@ -1530,7 +1595,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
-    if args and len(args> 0):
+    if args and len(args) > 0:
         try:
             invited_by = int(args[0])
             if invited_by != update.effective_user.id:
@@ -1547,6 +1612,7 @@ application.add_handler(CommandHandler("stats", stats_command))
 application.add_handler(CommandHandler("numbers", numbers_command))
 application.add_handler(CommandHandler("coupon", coupon_command))
 application.add_handler(CommandHandler("notification", notification_command))
+application.add_handler(CommandHandler("backup", backup_command))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
