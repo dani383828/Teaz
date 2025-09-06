@@ -172,11 +172,6 @@ async def create_tables():
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
 
-# ---------- تابع برای تولید کد تخفیف تصادفی ----------
-def generate_coupon_code(length=8):
-    characters = string.ascii_uppercase + string.digits
-    return ''.join(random.choice(characters) for _ in range(length))
-
 # ---------- دستور جدید برای بکاپ گیری از دیتابیس ----------
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -239,6 +234,58 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"Error in backup command: {e}")
         await update.message.reply_text(f"⚠️ خطا در تهیه بکاپ: {str(e)}")
+
+# ---------- دستور جدید برای بازیابی دیتابیس ----------
+async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    await update.message.reply_text("📤 لطفا فایل بکاپ دیتابیس را ارسال کنید:")
+    user_states[update.effective_user.id] = "awaiting_backup_file"
+
+# ---------- تابع برای بازیابی دیتابیس از فایل بکاپ ----------
+async def restore_database_from_backup(file_path: str):
+    """
+    بازیابی دیتابیس از فایل بکاپ
+    """
+    try:
+        # استخراج اطلاعات اتصال از DATABASE_URL
+        import urllib.parse
+        parsed_url = urllib.parse.urlparse(DATABASE_URL)
+        db_name = parsed_url.path[1:]
+        db_user = parsed_url.username
+        db_password = parsed_url.password
+        db_host = parsed_url.hostname
+        db_port = parsed_url.port or 5432
+        
+        # اجرای دستور psql برای بازیابی
+        cmd = [
+            'psql',
+            '-h', db_host,
+            '-p', str(db_port),
+            '-U', db_user,
+            '-d', db_name,
+            '-f', file_path
+        ]
+        
+        # تنظیم محیط برای پسورد
+        env = os.environ.copy()
+        env['PGPASSWORD'] = db_password
+        
+        # اجرای دستور
+        process = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        
+        if process.returncode != 0:
+            error_msg = stderr.decode('utf-8') if stderr else "Unknown error"
+            raise Exception(f"Restore failed: {error_msg}")
+        
+        return True, "✅ دیتابیس با موفقیت بازیابی شد."
+        
+    except Exception as e:
+        logging.error(f"Error restoring database: {e}")
+        return False, f"⚠️ خطا در بازیابی دیتابیس: {str(e)}"
 
 # ---------- دستور جدید برای اطلاع رسانی به همه کاربران ----------
 async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -775,7 +822,8 @@ async def set_bot_commands():
             BotCommand(command="/numbers", description="نمایش شماره‌های کاربران (ادمین)"),
             BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)"),
             BotCommand(command="/notification", description="ارسال اطلاعیه به همه کاربران (ادمین)"),
-            BotCommand(command="/backup", description="تهیه بکاپ از دیتابیس (ادمین)")
+            BotCommand(command="/backup", description="تهیه بکاپ از دیتابیس (ادمین)"),
+            BotCommand(command="/restore", description="بازیابی دیتابیس از بکاپ (ادمین)")
         ]
         await application.bot.set_my_commands(public_commands)
         await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
@@ -870,6 +918,45 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
         return
+
+    # هندلر جدید برای دریافت فایل بکاپ
+    if user_states.get(user_id) == "awaiting_backup_file":
+        if update.message.document:
+            try:
+                # دریافت فایل
+                file = await context.bot.get_file(update.message.document.file_id)
+                
+                # ایجاد فایل موقت برای ذخیره بکاپ
+                with tempfile.NamedTemporaryFile(suffix='.sql', delete=False) as tmp_file:
+                    backup_file = tmp_file.name
+                
+                # دانلود فایل
+                await file.download_to_drive(backup_file)
+                
+                await update.message.reply_text("🔄 در حال بازیابی دیتابیس...")
+                
+                # بازیابی دیتابیس
+                success, message = await restore_database_from_backup(backup_file)
+                
+                # حذف فایل موقت
+                os.unlink(backup_file)
+                
+                if success:
+                    await update.message.reply_text(message, reply_markup=get_main_keyboard())
+                else:
+                    await update.message.reply_text(message, reply_markup=get_main_keyboard())
+                
+                user_states.pop(user_id, None)
+                return
+                
+            except Exception as e:
+                logging.error(f"Error in restore process: {e}")
+                await update.message.reply_text(f"⚠️ خطا در بازیابی دیتابیس: {str(e)}", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+                return
+        else:
+            await update.message.reply_text("⚠️ لطفا یک فایل بکاپ ارسال کنید.", reply_markup=get_back_keyboard())
+            return
 
     if update.message.photo or update.message.document or update.message.text:
         state = user_states.get(user_id)
@@ -1029,7 +1116,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("⚠️ لطفا یکی از گزینه‌های بالا را انتخاب کنید.", reply_markup=get_coupon_recipient_keyboard())
                 return
-        elif state and state.startswith("awaiting_coupon_percent_") and user_id == ADMIN_ID:
+        elif state and state.startswith("awaiting_couton_percent_") and user_id == ADMIN_ID:
             parts = state.split("_")
             coupon_code = parts[3]
             discount_percent = int(parts[4])
@@ -1613,6 +1700,7 @@ application.add_handler(CommandHandler("numbers", numbers_command))
 application.add_handler(CommandHandler("coupon", coupon_command))
 application.add_handler(CommandHandler("notification", notification_command))
 application.add_handler(CommandHandler("backup", backup_command))
+application.add_handler(CommandHandler("restore", restore_command))
 application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
