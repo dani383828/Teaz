@@ -1528,7 +1528,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states.pop(user_id, None)
         return
 
-        if text == "🧑‍💼 درخواست نمایندگی":
+            if text == "🧑‍💼 درخواست نمایندگی":
         is_agent = await is_user_agent(user_id)
         if is_agent:
             await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent=True))
