@@ -1550,8 +1550,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     "🔹 شما تعیین‌کننده قیمت فروش به مشتری هستید\n"
     "🔹 پشتیبانی کامل و ۲۴ ساعته\n\n"
     "🔻 در صورت تایید موارد بالا روش پرداخت خود را انتخاب کنید"
-)
-await 
+               )
+               await 
 update.message.reply_text(agency_text, reply_markup=get_payment_method_keyboard())
 user_states[user_id] = "awaiting_agency_payment_method"
 return
