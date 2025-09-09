@@ -1528,7 +1528,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states.pop(user_id, None)
         return
 
-    if text == "🧑‍💼 درخواست نمایندگی":
+        if text == "🧑‍💼 درخواست نمایندگی":
         is_agent = await is_user_agent(user_id)
         if is_agent:
             await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent=True))
@@ -1555,64 +1555,64 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id] = "awaiting_agency_payment_method"
         return
 
-if user_states.get(user_id) == "awaiting_agency_payment_method":
-    amount = 1000000
-    description = "درخواست نمایندگی"
-    if text == "🏦 کارت به کارت":
-        payment_id = await add_payment(user_id, amount, "agency_request", "card_to_card", description=description)
-        if payment_id:
-            await update.message.reply_text(
-                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
-                reply_markup=get_back_keyboard(),
-                parse_mode="MarkdownV2"
-            )
-            user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
-        else:
-            await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-            user_states.pop(user_id, None)
-        return
-    if text == "💎 پرداخت با ترون":
-        payment_id = await add_payment(user_id, amount, "agency_request", "tron", description=description)
-        if payment_id:
-            await update.message.reply_text(
-                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
-                reply_markup=get_back_keyboard(),
-                parse_mode="MarkdownV2"
-            )
-            user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
-        else:
-            await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-            user_states.pop(user_id, None)
-        return
-    if text == "💰 پرداخت با موجودی":
-        balance = await get_balance(user_id)
-        if balance >= amount:
-            payment_id = await add_payment(user_id, amount, "agency_request", "balance", description=description)
+    if user_states.get(user_id) == "awaiting_agency_payment_method":
+        amount = 1000000
+        description = "درخواست نمایندگی"
+        if text == "🏦 کارت به کارت":
+            payment_id = await add_payment(user_id, amount, "agency_request", "card_to_card", description=description)
             if payment_id:
-                await deduct_balance(user_id, amount)
-                await update_payment_status(payment_id, "approved")
-                await set_user_agent(user_id)
                 await update.message.reply_text(
-                    "✅ درخواست نمایندگی شما با موفقیت ثبت شد. شما اکنون نماینده هستید!",
-                    reply_markup=get_main_keyboard()
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                    f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="MarkdownV2"
                 )
-                await context.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود نمایندگی خریداری کرد."
-                )
-                user_states.pop(user_id, None)
+                user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
             else:
                 await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
                 user_states.pop(user_id, None)
-        else:
-            await update.message.reply_text(
-                f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
-                reply_markup=get_main_keyboard()
-            )
-            user_states.pop(user_id, None)
-        return
+            return
+        if text == "💎 پرداخت با ترون":
+            payment_id = await add_payment(user_id, amount, "agency_request", "tron", description=description)
+            if payment_id:
+                await update.message.reply_text(
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                    f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="MarkdownV2"
+                )
+                user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
+            else:
+                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+            return
+        if text == "💰 پرداخت با موجودی":
+            balance = await get_balance(user_id)
+            if balance >= amount:
+                payment_id = await add_payment(user_id, amount, "agency_request", "balance", description=description)
+                if payment_id:
+                    await deduct_balance(user_id, amount)
+                    await update_payment_status(payment_id, "approved")
+                    await set_user_agent(user_id)
+                    await update.message.reply_text(
+                        "✅ درخواست نمایندگی شما با موفقیت ثبت شد. شما اکنون نماینده هستید!",
+                        reply_markup=get_main_keyboard()
+                    )
+                    await context.bot.send_message(
+                        chat_id=ADMIN_ID,
+                        text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود نمایندگی خریداری کرد."
+                    )
+                    user_states.pop(user_id, None)
+                else:
+                    await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                    user_states.pop(user_id, None)
+            else:
+                await update.message.reply_text(
+                    f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+            return
 
 # ---------- Callback Query Handler ----------
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
