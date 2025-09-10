@@ -914,7 +914,7 @@ async def set_bot_commands():
             BotCommand(command="/notification", description="ارسال اطلاعیه به همه کاربران (ادمین)"),
             BotCommand(command="/backup", description="تهیه بکاپ از دیتابیس (ادمین)"),
             BotCommand(command="/restore", description="بازیابی دیتابیس از بکاپ (ادمین)"),
-            BotCommand(command("/balance_management", description="مدیریت موجودی کاربران (ادمین)"),
+            BotCommand(command="/balance_management", description="مدیریت موجودی کاربران (ادمین)"),
             BotCommand(command="/change_user_type", description="تغییر نوع کاربر (ادمین)"),
             BotCommand(command="/list_channels", description="لیست کانال‌های اجباری (ادمین)")
         ]
