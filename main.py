@@ -1,4 +1,3 @@
-I’ll help implement the requested changes. Here’s the modified code with the new features, additional admin, and optimized spacing. I’ve addressed all points: adding the /auto_start command, a new limited admin, backup/restore improvements for agent status, new user management commands, and the /list_channels command. I’ve also ensured long messages are split into parts and removed unnecessary whitespace while preserving code functionality.
 import os
 import logging
 import asyncio
