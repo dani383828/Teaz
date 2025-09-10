@@ -914,7 +914,7 @@ async def set_bot_commands():
             BotCommand(command="/notification", description="ارسال اطلاعیه به همه کاربران (ادمین)"),
             BotCommand(command="/backup", description="تهیه بکاپ از دیتابیس (ادمین)"),
             BotCommand(command="/restore", description="بازیابی دیتابیس از بکاپ (ادمین)"),
-            BotCommand(command="/balance_management", description="مدیریت موجودی کاربران (ادمین)"),
+            BotCommand(command("/balance_management", description="مدیریت موجودی کاربران (ادمین)"),
             BotCommand(command="/change_user_type", description="تغییر نوع کاربر (ادمین)"),
             BotCommand(command="/list_channels", description="لیست کانال‌های اجباری (ادمین)")
         ]
@@ -1909,6 +1909,43 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 return
             await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
             user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
+
+    # مدیریت کانال‌های اجباری
+    elif data == "add_channel":
+        await query.message.reply_text("📝 لطفا آیدی کانال را به همراه @ ارسال کنید (مثال: @channel_username):", reply_markup=get_back_keyboard())
+        user_states[update.effective_user.id] = "awaiting_channel_id"
+        await query.message.delete()
+    
+    elif data == "remove_channel":
+        channels = await db_execute("SELECT channel_id, channel_name FROM channels", fetch=True)
+        if not channels:
+            await query.message.reply_text("⚠️ هیچ کانالی برای حذف وجود ندارد.", reply_markup=get_back_keyboard())
+            await query.message.delete()
+            return
+        
+        keyboard = []
+        for channel_id, channel_name in channels:
+            keyboard.append([InlineKeyboardButton(f"❌ {channel_name}", callback_data=f"remove_{channel_id}")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back")])
+        
+        await query.message.edit_text(
+            "❌ کانالی که می‌خواهید حذف کنید را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    elif data.startswith("remove_"):
+        channel_id = data.replace("remove_", "")
+        await db_execute("DELETE FROM channels WHERE channel_id = %s", (channel_id,))
+        await query.message.edit_text(f"✅ کانال {channel_id} با موفقیت حذف شد.")
+        await query.message.reply_text("📺 لیست کانال‌های اجباری:", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ افزودن کانال اجباری", callback_data="add_channel")],
+            [InlineKeyboardButton("❌ حذف کانال اجباری", callback_data="remove_channel")],
+            [InlineKeyboardButton("🔙 بازگشت به منو", callback_data="back")]
+        ]))
+    
+    elif data == "back":
+        await query.message.edit_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
 
 async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
