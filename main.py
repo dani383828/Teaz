@@ -725,7 +725,8 @@ async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
         await send_long_message(update.effective_user.id, response, context, reply_markup=get_main_keyboard())
     except Exception as e:
         logging.error(f"Error in debug_subscriptions: {e}")
-        await update.message.reply_text(f"⚠️ خطا در بررسی اشتراک‌ها: {str(e)}", reply_markup=get_main_keyboard())user_states = {}
+        await update.message.reply_text(f"⚠️ خطا در بررسی اشتراک‌ها: {str(e)}", reply_markup=get_main_keyboard())
+        user_states = {}
 
 async def set_bot_commands():
     try:
