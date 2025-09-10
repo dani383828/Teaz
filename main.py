@@ -1393,6 +1393,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             await update.message.reply_text("⚠️ لطفا یکی از روش‌های پرداخت را انتخاب کنید.", reply_markup=get_payment_method_keyboard())
             return
+            
     if text == "🎁 اشتراک تست رایگان":
         subscriptions = await get_user_subscriptions(user_id)
         has_free_subscription = any(sub['plan'] == "تست رایگان" and sub['status'] == 'active' for sub in subscriptions)
