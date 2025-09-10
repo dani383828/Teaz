@@ -41,7 +41,6 @@ import subprocess
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 db_pool: pool.ThreadedConnectionPool = None
-auto_start_task = None  # برای ذخیره تسک اتوماتیک
 
 def init_db_pool():
     global db_pool
@@ -181,38 +180,6 @@ async def create_tables():
         logging.info("Database tables created and migrated successfully")
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
-
-# ---------- دستور auto_start ----------
-async def auto_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in [ADMIN_ID, SECOND_ADMIN_ID]:
-        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
-        return
-    
-    global auto_start_task
-    
-    if auto_start_task and not auto_start_task.done():
-        auto_start_task.cancel()
-        auto_start_task = None
-        await update.message.reply_text("✅ توقف ارسال خودکار استارت انجام شد.")
-        return
-    
-    auto_start_task = asyncio.create_task(auto_start_loop(context))
-    await update.message.reply_text("✅ شروع ارسال خودکار استارت هر ۵ دقیقه...")
-
-async def auto_start_loop(context):
-    try:
-        while True:
-            try:
-                await context.bot.send_message(ADMIN_ID, "/start")
-                await asyncio.sleep(300)  # هر ۵ دقیقه
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logging.error(f"Error in auto_start_loop: {e}")
-                await asyncio.sleep(300)
-    except asyncio.CancelledError:
-        pass
 
 # ---------- دستور مدیریت موجودی کاربران ----------
 async def balance_management_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -698,8 +665,27 @@ async def mark_coupon_used(code):
 # ---------- توابع DB موجود ----------
 async def is_user_member(user_id):
     try:
-        member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
+        # بررسی عضویت در کانال اصلی
+        try:
+            member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
+            if member.status not in ["member", "administrator", "creator"]:
+                return False
+        except Exception as e:
+            logging.error(f"Error checking main channel membership: {e}")
+            return False
+        
+        # بررسی عضویت در کانال‌های اجباری
+        channels = await db_execute("SELECT channel_id FROM channels", fetch=True)
+        for channel in channels:
+            try:
+                channel_member = await application.bot.get_chat_member(channel[0], user_id)
+                if channel_member.status not in ["member", "administrator", "creator"]:
+                    return False
+            except Exception as e:
+                logging.error(f"Error checking channel {channel[0]} membership: {e}")
+                return False
+        
+        return True
     except Exception:
         return False
 
@@ -928,31 +914,47 @@ async def set_bot_commands():
             BotCommand(command="/notification", description="ارسال اطلاعیه به همه کاربران (ادمین)"),
             BotCommand(command="/backup", description="تهیه بکاپ از دیتابیس (ادمین)"),
             BotCommand(command="/restore", description="بازیابی دیتابیس از بکاپ (ادمین)"),
-            BotCommand(command="/auto_start", description="شروع/توقف اتوماتیک استارت (ادمین)"),
             BotCommand(command="/balance_management", description="مدیریت موجودی کاربران (ادمین)"),
             BotCommand(command="/change_user_type", description="تغییر نوع کاربر (ادمین)"),
             BotCommand(command="/list_channels", description="لیست کانال‌های اجباری (ادمین)")
         ]
-        second_admin_commands = [
-            BotCommand(command="/auto_start", description="شروع/توقف اتوماتیک استارت")
-        ]
         await application.bot.set_my_commands(public_commands)
         await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
-        await application.bot.set_my_commands(second_admin_commands, scope={"type": "chat", "chat_id": SECOND_ADMIN_ID})
         logging.info("Bot commands set successfully")
     except Exception as e:
         logging.error(f"Error setting bot commands: {e}")
+
+async def check_membership(user_id):
+    """بررسی عضویت کاربر در کانال‌های اجباری"""
+    if not await is_user_member(user_id):
+        # ساخت دکمه‌های عضویت در کانال‌ها
+        keyboard = []
+        
+        # دکمه کانال اصلی
+        keyboard.append([InlineKeyboardButton("📢 عضویت در کانال اصلی", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")])
+        
+        # دکمه‌های کانال‌های اجباری
+        channels = await db_execute("SELECT channel_id, channel_name FROM channels", fetch=True)
+        for channel_id, channel_name in channels:
+            keyboard.append([InlineKeyboardButton(f"📢 عضویت در {channel_name}", url=f"https://t.me/{channel_id.replace('@','')}")])
+        
+        keyboard.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")])
+        
+        return False, InlineKeyboardMarkup(keyboard)
+    
+    return True, None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     username = user.username or ""
 
-    if not await is_user_member(user_id):
-        kb = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]]
+    # بررسی عضویت در کانال‌های اجباری
+    is_member, reply_markup = await check_membership(user_id)
+    if not is_member:
         await update.message.reply_text(
-            "❌ برای استفاده از ربات، ابتدا در کانال ما عضو شوید و سپس مجدد /start را بزنید.",
-            reply_markup=InlineKeyboardMarkup(kb)
+            "❌ برای استفاده از ربات، ابتدا در کانال‌های زیر عضو شوید و سپس روی دکمه 'بررسی عضویت' کلیک کنید:",
+            reply_markup=reply_markup
         )
         return
 
@@ -979,6 +981,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
+    # بررسی عضویت در کانال‌های اجباری
+    is_member, reply_markup = await check_membership(user_id)
+    if not is_member:
+        await update.message.reply_text(
+            "❌ برای استفاده از ربات، ابتدا در کانال‌های زیر عضو شوید و سپس روی دکمه 'بررسی عضویت' کلیک کنید:",
+            reply_markup=reply_markup
+        )
+        return
+    
     if user_states.get(user_id) != "awaiting_contact":
         return
     contact = update.message.contact
@@ -1013,6 +1025,15 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
+
+    # بررسی عضویت در کانال‌های اجباری برای تمام پیام‌ها
+    is_member, reply_markup = await check_membership(user_id)
+    if not is_member:
+        await update.message.reply_text(
+            "❌ برای استفاده از ربات، ابتدا در کانال‌های زیر عضو شوید و سپس روی دکمه 'بررسی عضویت' کلیک کنید:",
+            reply_markup=reply_markup
+        )
+        return
 
     if user_states.get(user_id) == "awaiting_contact":
         contact_keyboard = ReplyKeyboardMarkup(
@@ -1817,6 +1838,23 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
     await query.answer()
 
+    if data == "check_membership":
+        user_id = query.from_user.id
+        is_member, reply_markup = await check_membership(user_id)
+        if is_member:
+            await query.message.edit_text("✅ شما در تمام کانال‌های مورد نیاز عضو هستید. اکنون می‌توانید از ربات استفاده کنید.")
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="🌐 به فروشگاه تیز VPN خوش آمدید!\n\nیک گزینه را انتخاب کنید:",
+                reply_markup=get_main_keyboard()
+            )
+        else:
+            await query.message.edit_text(
+                "❌ هنوز در برخی کانال‌ها عضو نشده‌اید. لطفا در کانال‌های زیر عضو شوید و سپس روی دکمه 'بررسی عضویت' کلیک کنید:",
+                reply_markup=reply_markup
+            )
+        return
+
     if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
         if update.effective_user.id != ADMIN_ID:
             await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
@@ -1893,7 +1931,6 @@ application.add_handler(CommandHandler("coupon", coupon_command))
 application.add_handler(CommandHandler("notification", notification_command))
 application.add_handler(CommandHandler("backup", backup_command))
 application.add_handler(CommandHandler("restore", restore_command))
-application.add_handler(CommandHandler("auto_start", auto_start_command))
 application.add_handler(CommandHandler("balance_management", balance_management_command))
 application.add_handler(CommandHandler("change_user_type", change_user_type_command))
 application.add_handler(CommandHandler("list_channels", list_channels_command))
