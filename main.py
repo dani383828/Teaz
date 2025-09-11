@@ -177,6 +177,20 @@ async def create_tables():
         await db_execute(CREATE_COUPONS_SQL)
         await db_execute(CREATE_CHANNELS_SQL)
         await db_execute(MIGRATE_SUBSCRIPTIONS_SQL)
+        
+        # افزودن کانال اصلی به لیست کانال‌های اجباری اگر وجود ندارد
+        channel_exists = await db_execute(
+            "SELECT channel_id FROM channels WHERE channel_id = %s", 
+            (CHANNEL_USERNAME,), 
+            fetchone=True
+        )
+        if not channel_exists:
+            await db_execute(
+                "INSERT INTO channels (channel_id, channel_name) VALUES (%s, %s)",
+                (CHANNEL_USERNAME, "کانال اصلی تیز VPN")
+            )
+            logging.info("کانال اصلی به لیست کانال‌های اجباری اضافه شد")
+        
         logging.info("Database tables created and migrated successfully")
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
@@ -425,6 +439,18 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fetchone=True
         )
         
+        # آمار کاربران فعال در 24 ساعت گذشته
+        active_24h = await db_execute(
+            "SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active' AND config IS NOT NULL AND start_date >= NOW() - INTERVAL '24 hours'",
+            fetchone=True
+        )
+        
+        # آمار کاربران فعال در هفته گذشته
+        active_7d = await db_execute(
+            "SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active' AND config IS NOT NULL AND start_date >= NOW() - INTERVAL '7 days'",
+            fetchone=True
+        )
+        
         today_income = await db_execute(
             "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved' AND created_at >= CURRENT_DATE",
             fetchone=True
@@ -489,7 +515,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stats_message += f"  • کاربران فعال: {active_users[0] if active_users else 0:,} نفر ✅\n"
         stats_message += f"  • کاربران غیرفعال: {inactive_users:,} نفر ❎\n"
         stats_message += f"  • کاربران جدید امروز: {today_users[0] if today_users else 0:,} نفر 🆕\n"
-        stats_message += f"  • کاربران دعوت‌شده: {invited_users[0] if invited_users else 0:,} نفر 🤝\n\n"
+        stats_message += f"  • کاربران دعوت‌شده: {invited_users[0] if invited_users else 0:,} نفر 🤝\n"
+        stats_message += f"  • کاربران فعال در 24 ساعت گذشته: {active_24h[0] if active_24h else 0:,} نفر ⏰\n"
+        stats_message += f"  • کاربران فعال در هفته گذشته: {active_7d[0] if active_7d else 0:,} نفر 📅\n\n"
         
         stats_message += "💸 درآمد:\n"
         stats_message += f"  • امروز: {today_income[0] if today_income else 0:,} تومان 💰\n"
@@ -1716,8 +1744,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "📕 آیفون/مک":
         await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های Singbox(پیشنهادی) или Streisand یا V2box(پیشنهادی) هست ✅\n"
-            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانфиگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های Singbox(پیشنهادی) یا Streisand یا V2box(پیشنهادی) هست ✅\n"
+            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
             reply_markup=get_connection_guide_keyboard()
         )
         user_states.pop(user_id, None)
