@@ -622,6 +622,9 @@ async def send_long_message(chat_id, text, context, reply_markup=None, parse_mod
         )
 
 # ---------- توابع DB برای کوپن‌ها ----------
+def generate_coupon_code():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
 async def create_coupon(code, discount_percent, user_id=None):
     try:
         await db_execute(
@@ -672,6 +675,7 @@ async def is_user_member(user_id):
                 return False
         except Exception as e:
             logging.error(f"Error checking main channel membership: {e}")
+            # در صورت خطای timeout یا دیگر خطاها، فرض می‌کنیم کاربر عضو نیست
             return False
         
         # بررسی عضویت در کانال‌های اجباری
@@ -683,6 +687,7 @@ async def is_user_member(user_id):
                     return False
             except Exception as e:
                 logging.error(f"Error checking channel {channel[0]} membership: {e}")
+                # در صورت خطای timeout یا دیگر خطاها، فرض می‌کنیم کاربر عضو نیست
                 return False
         
         return True
@@ -1711,8 +1716,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "📕 آیفون/مک":
         await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های Singbox(پیشنهادی) یا Streisand یا V2box(پیشنهادی) هست ✅\n"
-            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های Singbox(پیشنهادی) или Streisand یا V2box(پیشنهادی) هست ✅\n"
+            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانфиگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
             reply_markup=get_connection_guide_keyboard()
         )
         user_states.pop(user_id, None)
