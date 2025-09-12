@@ -14,7 +14,7 @@ from telegram.ext import (
 
 # ---------- تنظیمات اولیه ----------
 TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
-CHANNEL_USERNAMES = ["@teazvpn", "@charkhoun"]  # Updated to include both channels
+CHANNEL_USERNAMES = ["@teazvpn", "@charkhoun"]
 ADMIN_ID = 5542927340
 TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
 BANK_CARD = "6037 9975 9717 2684"
@@ -29,7 +29,7 @@ logging.basicConfig(
 )
 
 app = FastAPI()
-application = Application.builder().token(TOKEN).build()
+application = None  # Initialize as None to avoid premature access
 
 # ---------- PostgreSQL connection pool (psycopg2) ----------
 import psycopg2
@@ -1741,7 +1741,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update_payment_status(payment_id, "rejected")
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ پرداخت شما برای {'اشتراک' if 'buy_subscription' in payment_id else 'افزایش موجودی'} ({description}) رد شد. لطفا با پشتیبانی تماس بگیرید."
+                    text=f"❌ پرداخت شما برای {'اشتراک' if 'buy_subscription' in data else 'افزایش موجودی'} ({description}) رد شد. لطفا با پشتیبانی تماس بگیرید."
                 )
                 await query.message.edit_reply_markup(reply_markup=None)
                 logging.info(f"Payment {payment_id} rejected by admin for user_id {user_id}")
@@ -1794,12 +1794,20 @@ async def health_check():
     return {"status": "healthy"}
 
 async def start_application():
+    global application
     try:
+        # Initialize the database pool
         init_db_pool()
+        # Create database tables
         await create_tables()
-        await application.initialize()
-        await set_bot_commands()
         
+        # Initialize the Application object if not already initialized
+        if application is None:
+            application = Application.builder().token(TOKEN).build()
+            await application.initialize()
+            logging.info("Application initialized successfully")
+        
+        # Add handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
         application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
@@ -1817,6 +1825,10 @@ async def start_application():
         application.add_handler(CommandHandler("set_balance", set_balance))
         application.add_error_handler(error_handler)
         
+        # Set bot commands
+        await set_bot_commands()
+        
+        # Set webhook
         await application.bot.set_webhook(WEBHOOK_URL)
         await application.start()
         logging.info("Application started with webhook")
@@ -1826,10 +1838,11 @@ async def start_application():
 
 async def stop_application():
     try:
-        await application.stop()
-        await application.bot.delete_webhook()
+        if application is not None:
+            await application.stop()
+            await application.bot.delete_webhook()
+            logging.info("Application stopped and webhook deleted")
         close_db_pool()
-        logging.info("Application stopped and webhook deleted")
     except Exception as e:
         logging.error(f"Error stopping application: {e}")
 
