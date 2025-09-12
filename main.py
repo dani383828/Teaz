@@ -1585,7 +1585,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         response += f"📅 تاریخ شروع: {sub['start_date'].strftime('%Y-%m-%d %H:%M')}\n"
                         response += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
                     
-                                        if sub['config']:
+                    if sub['config']:
                         response += f"🔐 کانفیگ:\n```\n{sub['config']}\n```\n"
                     response += "--------------------\n"
                 except Exception as e:
