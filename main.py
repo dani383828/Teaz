@@ -1611,19 +1611,35 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if text == "🎁 اشتراک تست رایگان":
-        await update.message.reply_text(
-            "🎁 برای دریافت اشتراک تست رایگان، با پشتیبانی تماس بگیرید: @TeazVpnSupport",
-            reply_markup=get_main_keyboard()
-        )
-        user_states.pop(user_id, None)
+        try:
+            await update.message.reply_text(
+                "🎁 برای دریافت اشتراک تست رایگان، با پشتیبانی تماس بگیرید: @teazadmin",
+                reply_markup=get_main_keyboard()
+            )
+            user_states.pop(user_id, None)
+        except Exception as e:
+            logging.error(f"Error in free subscription request for user_id {user_id}: {e}")
+            await update.message.reply_text(
+                "⚠️ خطا در درخواست اشتراک تست رایگان. لطفا دوباره تلاش کنید.",
+                reply_markup=get_main_keyboard()
+            )
+            user_states.pop(user_id, None)
         return
 
     if text == "☎️ پشتیبانی":
-        await update.message.reply_text(
-            "📞 برای پشتیبانی با @TeazVpnSupport تماس بگیرید.",
-            reply_markup=get_main_keyboard()
-        )
-        user_states.pop(user_id, None)
+        try:
+            await update.message.reply_text(
+                "📞 برای پشتیبانی با @teazadmin تماس بگیرید.",
+                reply_markup=get_main_keyboard()
+            )
+            user_states.pop(user_id, None)
+        except Exception as e:
+            logging.error(f"Error in support request for user_id {user_id}: {e}")
+            await update.message.reply_text(
+                "⚠️ خطا در درخواست پشتیبانی. لطفا دوباره تلاش کنید.",
+                reply_markup=get_main_keyboard()
+            )
+            user_states.pop(user_id, None)
         return
 
     if text == "💵 اعتبار رایگان":
