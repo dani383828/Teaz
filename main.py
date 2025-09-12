@@ -14,7 +14,7 @@ from telegram.ext import (
 
 # ---------- تنظیمات اولیه ----------
 TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
-CHANNEL_USERNAME = "@teazvpn"
+CHANNEL_USERNAMES = ["@teazvpn", "@charkhoun"]  # Updated to include both channels
 ADMIN_ID = 5542927340
 TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
 BANK_CARD = "6037 9975 9717 2684"
@@ -181,11 +181,9 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text("🔄 در حال تهیه بکاپ از دیتابیس...")
         
-        # ایجاد فایل موقت برای بکاپ
         with tempfile.NamedTemporaryFile(suffix='.sql', delete=False) as tmp_file:
             backup_file = tmp_file.name
         
-        # استخراج اطلاعات اتصال از DATABASE_URL
         import urllib.parse
         parsed_url = urllib.parse.urlparse(DATABASE_URL)
         db_name = parsed_url.path[1:]
@@ -194,7 +192,6 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_host = parsed_url.hostname
         db_port = parsed_url.port or 5432
         
-        # اجرای دستور pg_dump برای بکاپ
         cmd = [
             'pg_dump',
             '-h', db_host,
@@ -202,14 +199,12 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '-U', db_user,
             '-d', db_name,
             '-f', backup_file,
-            '-F', 'p'  # فرمت plain text
+            '-F', 'p'
         ]
         
-        # تنظیم محیط برای پسورد
         env = os.environ.copy()
         env['PGPASSWORD'] = db_password
         
-        # اجرای دستور
         process = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
         
@@ -217,7 +212,6 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             error_msg = stderr.decode('utf-8') if stderr else "Unknown error"
             raise Exception(f"Backup failed: {error_msg}")
         
-        # ارسال فایل بکاپ
         with open(backup_file, 'rb') as file:
             await context.bot.send_document(
                 chat_id=ADMIN_ID,
@@ -226,7 +220,6 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption="✅ بکاپ از دیتابیس با موفقیت تهیه شد."
             )
         
-        # حذف فایل موقت
         os.unlink(backup_file)
         
         await update.message.reply_text("✅ بکاپ با موفقیت تهیه و ارسال شد.")
@@ -246,11 +239,7 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- تابع برای بازیابی دیتابیس از فایل بکاپ ----------
 async def restore_database_from_backup(file_path: str):
-    """
-    بازیابی دیتابیس از فایل بکاپ
-    """
     try:
-        # استخراج اطلاعات اتصال از DATABASE_URL
         import urllib.parse
         parsed_url = urllib.parse.urlparse(DATABASE_URL)
         db_name = parsed_url.path[1:]
@@ -259,7 +248,6 @@ async def restore_database_from_backup(file_path: str):
         db_host = parsed_url.hostname
         db_port = parsed_url.port or 5432
         
-        # اجرای دستور psql برای بازیابی
         cmd = [
             'psql',
             '-h', db_host,
@@ -269,11 +257,9 @@ async def restore_database_from_backup(file_path: str):
             '-f', file_path
         ]
         
-        # تنظیم محیط برای پسورد
         env = os.environ.copy()
         env['PGPASSWORD'] = db_password
         
-        # اجرای دستور
         process = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
         
@@ -287,7 +273,7 @@ async def restore_database_from_backup(file_path: str):
         logging.error(f"Error restoring database: {e}")
         return False, f"⚠️ خطا در بازیابی دیتابیس: {str(e)}"
 
-# ---------- دستور جدید برای اطلاع رسانی به همه کاربران ----------
+# ---------- دستور جدید برای اطلاع‌رسانی به همه کاربران ----------
 async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
@@ -338,6 +324,143 @@ async def numbers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"Error in numbers_command: {e}")
         await update.message.reply_text("⚠️ خطایی در نمایش شماره‌ها رخ داد. لطفاً دوباره تلاش کنید.")
+
+# ---------- دستور جدید برای تغییر نوع کاربر ----------
+async def change_user_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    try:
+        if not context.args:
+            await update.message.reply_text("⚠️ لطفا ID عددی کاربر را وارد کنید.\nمثال: /change_user_type 123456789")
+            return
+        
+        target_user_id = int(context.args[0])
+        user = await db_execute(
+            "SELECT is_agent FROM users WHERE user_id = %s",
+            (target_user_id,), fetchone=True
+        )
+        
+        if not user:
+            await update.message.reply_text(f"⚠️ کاربری با ID {target_user_id} یافت نشد.")
+            return
+        
+        is_agent = user[0]
+        new_type = not is_agent
+        await db_execute(
+            "UPDATE users SET is_agent = %s WHERE user_id = %s",
+            (new_type, target_user_id)
+        )
+        
+        new_type_text = "نماینده" if new_type else "کاربر ساده"
+        await update.message.reply_text(
+            f"✅ نوع کاربر با ID {target_user_id} به {new_type_text} تغییر یافت."
+        )
+        logging.info(f"User {target_user_id} changed to {'agent' if new_type else 'regular'} by admin {ADMIN_ID}")
+        
+        # Notify the user
+        await context.bot.send_message(
+            chat_id=target_user_id,
+            text=f"📢 نوع حساب شما به {new_type_text} تغییر یافت."
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in change_user_type for user_id {target_user_id}: {e}")
+        await update.message.reply_text(f"⚠️ خطا در تغییر نوع کاربر: {str(e)}")
+
+# ---------- دستور جدید برای مدیریت موجودی کاربران ----------
+async def balance_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    try:
+        users = await db_execute(
+            "SELECT user_id, username, balance, is_agent FROM users ORDER BY created_at DESC",
+            fetch=True
+        )
+        if not users:
+            await update.message.reply_text("📂 هیچ کاربری یافت نشد.")
+            return
+
+        response = "📊 لیست کاربران و موجودی‌ها:\n\n"
+        for user in users:
+            user_id, username, balance, is_agent = user
+            username_display = f"@{username}" if username else f"ID: {user_id}"
+            type_display = "نماینده" if is_agent else "کاربر ساده"
+            response += f"کاربر: {username_display}\n"
+            response += f"موجودی: {balance:,} تومان\n"
+            response += f"نوع: {type_display}\n"
+            response += "--------------------\n"
+
+        await send_long_message(
+            update.effective_user.id,
+            response,
+            context,
+            reply_markup=get_main_keyboard()
+        )
+        
+        await update.message.reply_text(
+            "📈 برای تغییر موجودی، ID کاربر و مقدار تغییر را وارد کنید (مثبت برای افزایش، منفی برای کاهش).\n"
+            "مثال: /set_balance 123456789 50000\nیا: /set_balance 123456789 -50000",
+            reply_markup=get_back_keyboard()
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in balance_management: {e}")
+        await update.message.reply_text("⚠️ خطایی در نمایش اطلاعات کاربران رخ داد. لطفاً دوباره تلاش کنید.")
+
+# ---------- دستور برای تنظیم موجودی کاربر ----------
+async def set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    try:
+        if len(context.args) != 2:
+            await update.message.reply_text("⚠️ لطفا ID عددی کاربر و مقدار تغییر را وارد کنید.\nمثال: /set_balance 123456789 50000")
+            return
+        
+        target_user_id = int(context.args[0])
+        amount = int(context.args[1])
+        
+        user = await db_execute(
+            "SELECT user_id FROM users WHERE user_id = %s",
+            (target_user_id,), fetchone=True
+        )
+        
+        if not user:
+            await update.message.reply_text(f"⚠️ کاربری با ID {target_user_id} یافت نشد.")
+            return
+        
+        if amount > 0:
+            await add_balance(target_user_id, amount)
+            action = "افزایش"
+        else:
+            current_balance = await get_balance(target_user_id)
+            if current_balance + amount < 0:
+                await update.message.reply_text(f"⚠️ موجودی کاربر ({current_balance:,} تومان) برای کاهش {abs(amount):,} تومان کافی نیست.")
+                return
+            await deduct_balance(target_user_id, abs(amount))
+            action = "کاهش"
+        
+        new_balance = await get_balance(target_user_id)
+        await update.message.reply_text(
+            f"✅ موجودی کاربر با ID {target_user_id} با موفقیت {action} یافت.\n"
+            f"موجودی جدید: {new_balance:,} تومان"
+        )
+        logging.info(f"Balance for user {target_user_id} {action} by {amount} by admin {ADMIN_ID}")
+        
+        # Notify the user
+        await context.bot.send_message(
+            chat_id=target_user_id,
+            text=f"📢 موجودی شما {action} یافت. موجودی جدید: {new_balance:,} تومان"
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in set_balance for user_id {target_user_id}: {e}")
+        await update.message.reply_text(f"⚠️ خطا در تنظیم موجودی: {str(e)}")
 
 # ---------- دستور آمار ربات ----------
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -594,8 +717,11 @@ async def mark_coupon_used(code):
 # ---------- توابع DB موجود ----------
 async def is_user_member(user_id):
     try:
-        member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
+        for channel in CHANNEL_USERNAMES:
+            member = await application.bot.get_chat_member(channel, user_id)
+            if member.status not in ["member", "administrator", "creator"]:
+                return False
+        return True
     except Exception:
         return False
 
@@ -805,6 +931,10 @@ async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
         logging.error(f"Error in debug_subscriptions: {e}")
         await update.message.reply_text(f"⚠️ خطا در بررسی اشتراک‌ها: {str(e)}")
 
+# ---------- تابع برای تولید کد تخفیف ----------
+def generate_coupon_code():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
 # ---------- وضعیت کاربر در مموری ----------
 user_states = {}
 
@@ -823,7 +953,10 @@ async def set_bot_commands():
             BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)"),
             BotCommand(command="/notification", description="ارسال اطلاعیه به همه کاربران (ادمین)"),
             BotCommand(command="/backup", description="تهیه بکاپ از دیتابیس (ادمین)"),
-            BotCommand(command="/restore", description="بازیابی دیتابیس از بکاپ (ادمین)")
+            BotCommand(command="/restore", description="بازیابی دیتابیس از بکاپ (ادمین)"),
+            BotCommand(command="/change_user_type", description="تغییر نوع کاربر (ادمین)"),
+            BotCommand(command="/balance_management", description="مدیریت موجودی کاربران (ادمین)"),
+            BotCommand(command="/set_balance", description="تنظیم موجودی کاربر (ادمین)")
         ]
         await application.bot.set_my_commands(public_commands)
         await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
@@ -837,9 +970,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username or ""
 
     if not await is_user_member(user_id):
-        kb = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]]
+        kb = [[InlineKeyboardButton(f"📢 عضویت در {channel}", url=f"https://t.me/{channel.replace('@','')}")] for channel in CHANNEL_USERNAMES]
         await update.message.reply_text(
-            "❌ برای استفاده از ربات، ابتدا در کانال ما عضو شوید و سپس مجدد /start را بزنید.",
+            "❌ برای استفاده از ربات، ابتدا در کانال‌های ما عضو شوید و سپس مجدد /start را بزنید.",
             reply_markup=InlineKeyboardMarkup(kb)
         )
         return
@@ -919,36 +1052,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states.pop(user_id, None)
         return
 
-    # هندلر جدید برای دریافت فایل بکاپ
     if user_states.get(user_id) == "awaiting_backup_file":
         if update.message.document:
             try:
-                # دریافت فایل
                 file = await context.bot.get_file(update.message.document.file_id)
-                
-                # ایجاد فایل موقت برای ذخیره بکاپ
                 with tempfile.NamedTemporaryFile(suffix='.sql', delete=False) as tmp_file:
                     backup_file = tmp_file.name
-                
-                # دانلود فایل
                 await file.download_to_drive(backup_file)
-                
                 await update.message.reply_text("🔄 در حال بازیابی دیتابیس...")
-                
-                # بازیابی دیتابیس
                 success, message = await restore_database_from_backup(backup_file)
-                
-                # حذف فایل موقت
                 os.unlink(backup_file)
-                
                 if success:
                     await update.message.reply_text(message, reply_markup=get_main_keyboard())
                 else:
                     await update.message.reply_text(message, reply_markup=get_main_keyboard())
-                
                 user_states.pop(user_id, None)
                 return
-                
             except Exception as e:
                 logging.error(f"Error in restore process: {e}")
                 await update.message.reply_text(f"⚠️ خطا در بازیابی دیتابیس: {str(e)}", reply_markup=get_main_keyboard())
@@ -1076,7 +1195,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_states.pop(user_id, None)
                 return
             elif text == "👤 برای یک نفر":
-                target_user_id = 6056483071  # کاربر مشخص‌شده
+                target_user_id = 6056483071
                 user = await db_execute(
                     "SELECT user_id, is_agent FROM users WHERE user_id = %s",
                     (target_user_id,), fetchone=True
@@ -1116,7 +1235,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("⚠️ لطفا یکی از گزینه‌های بالا را انتخاب کنید.", reply_markup=get_coupon_recipient_keyboard())
                 return
-        elif state and state.startswith("awaiting_couton_percent_") and user_id == ADMIN_ID:
+        elif state and state.startswith("awaiting_coupon_percent_") and user_id == ADMIN_ID:
             parts = state.split("_")
             coupon_code = parts[3]
             discount_percent = int(parts[4])
@@ -1466,277 +1585,259 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         response += f"📅 تاریخ شروع: {sub['start_date'].strftime('%Y-%m-%d %H:%M')}\n"
                         response += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
                     
-                    if sub['config']:
+                                        if sub['config']:
                         response += f"🔐 کانفیگ:\n```\n{sub['config']}\n```\n"
-                    
-                    response += "------------------------\n\n"
-                    
+                    response += "--------------------\n"
                 except Exception as e:
                     logging.error(f"Error processing subscription {sub['id']} for user_id {user_id}: {e}")
+                    response += f"⚠️ خطا در نمایش اشتراک #{sub['id']}\n--------------------\n"
                     continue
-            
-            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="Markdown")
-            
+
+            await send_long_message(
+                update.effective_user.id,
+                response,
+                context,
+                reply_markup=get_main_keyboard(),
+                parse_mode="Markdown"
+            )
+            user_states.pop(user_id, None)
         except Exception as e:
             logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
-            await update.message.reply_text("⚠️ خطا در نمایش اشتراک‌ها. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-        
-        user_states.pop(user_id, None)
+            await update.message.reply_text("⚠️ خطایی در نمایش اشتراک‌ها رخ داد. لطفاً دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
         return
 
     if text == "💡 راهنمای اتصال":
-        await update.message.reply_text(
-            "راهنمای راه‌اندازی\nدستگاه خود را انتخاب کنید:",
-            reply_markup=get_connection_guide_keyboard()
-        )
+        await update.message.reply_text("📚 سیستم‌عامل خود را انتخاب کنید:", reply_markup=get_connection_guide_keyboard())
         user_states.pop(user_id, None)
         return
 
-    if text == "📗 اندروید":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های V2RayNG یا Hiddify(پیشنهادی) است ✅\n"
-            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        user_states.pop(user_id, None)
-        return
-
-    if text == "📕 آیفون/مک":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های Singbox(پیشنهادی) یا Streisand یا V2box(پیشنهادی) هست ✅\n"
-            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        user_states.pop(user_id, None)
-        return
-
-    if text == "📘 ویندوز":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\n"
-            "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        user_states.pop(user_id, None)
-        return
-
-    if text == "📙 لینوکس":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\n"
-            "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
+    if text in ["📗 اندروید", "📕 آیفون/مک", "📘 ویندوز", "📙 لینوکس"]:
+        guides = {
+            "📗 اندروید": (
+                "📱 راهنمای اتصال برای اندروید:\n\n"
+                "۱. اپلیکیشن *v2rayNG* را از گوگل پلی یا لینک مستقیم نصب کنید.\n"
+                "۲. کانفیگ دریافتی را کپی کنید.\n"
+                "۳. در v2rayNG، روی + کلیک کنید و گزینه 'Import config from clipboard' را انتخاب کنید.\n"
+                "۴. کانفیگ را جای‌گذاری کرده و ذخیره کنید.\n"
+                "۵. سرور را انتخاب کرده و اتصال را برقرار کنید.\n\n"
+                "لینک دانلود v2rayNG:\nhttps://t.me/teazvpn/123"
+            ),
+            "📕 آیفون/مک": (
+                "📱 راهنمای اتصال برای iOS/Mac:\n\n"
+                "۱. اپلیکیشن *Shadowrocket* یا *V2Box* را از اپ استور نصب کنید.\n"
+                "۲. کانفیگ دریافتی را کپی کنید.\n"
+                "۳. در اپلیکیشن، گزینه افزودن کانفیگ را انتخاب کرده و کانفیگ را وارد کنید.\n"
+                "۴. سرور را انتخاب کرده و اتصال را برقرار کنید.\n\n"
+                "لینک دانلود Shadowrocket:\nhttps://t.me/teazvpn/124"
+            ),
+            "📘 ویندوز": (
+                "💻 راهنمای اتصال برای ویندوز:\n\n"
+                "۱. نرم‌افزار *v2rayN* را از سایت رسمی دانلود و نصب کنید.\n"
+                "۲. کانفیگ دریافتی را کپی کنید.\n"
+                "۳. در v2rayN، روی 'Servers' کلیک کرده و 'Import from clipboard' را انتخاب کنید.\n"
+                "۴. سرور را انتخاب کرده و اتصال را برقرار کنید.\n\n"
+                "لینک دانلود v2rayN:\nhttps://t.me/teazvpn/125"
+            ),
+            "📙 لینوکس": (
+                "🐧 راهنمای اتصال برای لینوکس:\n\n"
+                "۱. پکیج *v2ray* را با استفاده از مدیر بسته سیستم خود نصب کنید.\n"
+                "۲. کانفیگ دریافتی را در فایل تنظیمات v2ray جای‌گذاری کنید.\n"
+                "۳. سرویس v2ray را ری‌استارت کنید.\n"
+                "۴. اتصال را بررسی کنید.\n\n"
+                "دستورات نمونه:\n"
+                "```bash\nsudo apt install v2ray\nsudo systemctl restart v2ray\n```\n"
+                "لینک مستندات:\nhttps://t.me/teazvpn/126"
+            )
+        }
+        await update.message.reply_text(guides[text], reply_markup=get_main_keyboard(), parse_mode="Markdown")
         user_states.pop(user_id, None)
         return
 
     if text == "🧑‍💼 درخواست نمایندگی":
         is_agent = await is_user_agent(user_id)
         if is_agent:
-            await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent=True))
+            await update.message.reply_text(
+                "✅ شما قبلاً نماینده هستید. برای جزئیات بیشتر با پشتیبانی تماس بگیرید: https://t.me/teazadmin",
+                reply_markup=get_main_keyboard()
+            )
             user_states.pop(user_id, None)
             return
-
-        agency_text = (
-            "🚀 اعطای نمایندگی رسمی تیز وی پی ان 🚀\n\n"
-            "اگر به دنبال یک فرصت درآمدزایی پایدار و بدون محدودیت هستید، حالا بهترین زمان برای پیوستن به تیم ماست!\n"
-            "ما به تعداد محدودی نماینده رسمی می‌پذیریم که بتوانند با فروش سرویس‌های پرسرعت و پایدار تیز وی پی ان، کسب‌وکار خودشان را راه‌اندازی کنند.\n\n"
-            "💰 شرایط دریافت نمایندگی:\n"
-            "برای شروع همکاری و فعال‌سازی پنل اختصاصی، کافیست ۱ میلیون تومان واریز کنید.\n"
-            "پس از واریز، شما به یک پنل کامل و شخصی دسترسی خواهید داشت که امکان ساخت و مدیریت اکانت‌ها را برایتان فراهم می‌کند.\n\n"
-            "📦 قیمت پلن‌ها برای نمایندگان:\n"
-            "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود | ۲ کاربره (٪۲۲ کاهش)\n"
-            "🥈۳ ماهه | ۲۱۰,۰۰۰ تومان | نامحدود | ۲ کاربره (٪۱۶ کاهش)\n"
-            "🥇۶ ماهه | ۳۸۰,۰۰۰ تومان | نامحدود | ۲ کاربره (٪۱۶ کاهش)\n\n"
-            "🔹 اکانت‌ها کاملاً نامحدود هستند (بدون محدودیت حجم یا سرعت)\n"
-            "🔹 شما تعیین‌کننده قیمت فروش به مشتری هستید\n"
-            "🔹 پشتیبانی کامل و ۲۴ ساعته\n\n"
-            "🔻 در صورت تایید موارد بالا روش پرداخت خود را انتخاب کنید"
+        await update.message.reply_text(
+            "💼 برای دریافت نمایندگی، لطفا ۵۰۰,۰۰۰ تومان واریز کنید و فیش را ارسال کنید:\n\n"
+            f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ\n\n"
+            f"یا\n\n💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
+            reply_markup=get_back_keyboard(),
+            parse_mode="MarkdownV2"
         )
-        await update.message.reply_text(agency_text, reply_markup=get_payment_method_keyboard())
-        user_states[user_id] = "awaiting_agency_payment_method"
+        payment_id = await add_payment(user_id, 500000, "agency_request", "card_to_card")
+        if payment_id:
+            user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
+        else:
+            await update.message.reply_text("⚠️ خطا در ثبت درخواست. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
         return
 
-    if user_states.get(user_id) == "awaiting_agency_payment_method":
-        amount = 1000000
-        description = "درخواست نمایندگی"
-        if text == "🏦 کارت به کارت":
-            payment_id = await add_payment(user_id, amount, "agency_request", "card_to_card", description=description)
-            if payment_id:
-                await update.message.reply_text(
-                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                    f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
-                    reply_markup=get_back_keyboard(),
-                    parse_mode="MarkdownV2"
-                )
-                user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
-            else:
-                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-                user_states.pop(user_id, None)
-            return
-
-        if text == "💎 پرداخت با ترون":
-            payment_id = await add_payment(user_id, amount, "agency_request", "tron", description=description)
-            if payment_id:
-                await update.message.reply_text(
-                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                    f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
-                    reply_markup=get_back_keyboard(),
-                    parse_mode="MarkdownV2"
-                )
-                user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
-            else:
-                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-                user_states.pop(user_id, None)
-            return
-
-        if text == "💰 پرداخت با موجودی":
-            balance = await get_balance(user_id)
-            if balance >= amount:
-                payment_id = await add_payment(user_id, amount, "agency_request", "balance", description=description)
-                if payment_id:
-                    await deduct_balance(user_id, amount)
-                    await update_payment_status(payment_id, "approved")
-                    await set_user_agent(user_id)
-                    await add_balance(user_id, amount)  # Add the 1M to balance
-                    await update.message.reply_text(
-                        "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.",
-                        reply_markup=get_main_keyboard()
-                    )
-                    await context.bot.send_message(
-                        chat_id=ADMIN_ID,
-                        text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود نمایندگی خریداری کرد."
-                    )
-                    user_states.pop(user_id, None)
-                else:
-                    await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-                    user_states.pop(user_id, None)
-            else:
-                await update.message.reply_text(
-                    f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
-                    reply_markup=get_main_keyboard()
-                )
-                user_states.pop(user_id, None)
-            return
-
-    await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
-    user_states.pop(user_id, None)
-
-async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    data = query.data
     await query.answer()
+    data = query.data
+    user_id = query.from_user.id
 
-    if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
-        if update.effective_user.id != ADMIN_ID:
-            await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
-            return
+    if user_id != ADMIN_ID:
+        await query.message.reply_text("⚠️ شما اجازه دسترسی به این عملیات را ندارید.")
+        return
 
-        if data.startswith("approve_"):
-            payment_id = int(data.split("_")[1])
-            payment = await db_execute("SELECT user_id, amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            user_id, amount, ptype, description = payment
-
-            await update_payment_status(payment_id, "approved")
-            if ptype == "increase_balance":
-                await add_balance(user_id, amount)
-                await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
-                await query.message.edit_reply_markup(None)
-                await query.message.reply_text("✅ پرداخت تایید شد.")
-            elif ptype == "buy_subscription":
-                await context.bot.send_message(user_id, f"✅ پرداخت تایید شد. اشتراک شما (کد خرید: #{payment_id}) ارسال خواهد شد.")
-                config_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
-                ])
-                await query.message.edit_reply_markup(None)
-                await query.message.reply_text(f"✅ پرداخت برای اشتراک ({description}) تایید شد.", reply_markup=config_keyboard)
-            elif ptype == "agency_request":
-                await set_user_agent(user_id)
-                await add_balance(user_id, amount)  # Add the 1M to balance
-                await context.bot.send_message(user_id, "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.")
-                await query.message.edit_reply_markup(None)
-                await query.message.reply_text("✅ درخواست نمایندگی تایید شد.")
-
-        elif data.startswith("reject_"):
-            payment_id = int(data.split("_")[1])
-            payment = await db_execute("SELECT user_id, amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            user_id, amount, ptype = payment
-
-            await update_payment_status(payment_id, "rejected")
-            await context.bot.send_message(user_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
-            await query.message.edit_reply_markup(None)
-            await query.message.reply_text("❌ پرداخت رد شد.")
-
-        elif data.startswith("send_config_"):
-            payment_id = int(data.split("_")[-1])
-            payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
-            user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
-
-async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if args and len(args) > 0:
+    if data.startswith("approve_"):
         try:
-            invited_by = int(args[0])
-            if invited_by != update.effective_user.id:
-                context.user_data["invited_by"] = invited_by
-        except:
-            context.user_data["invited_by"] = None
-    await start(update, context)
+            payment_id = int(data.split("_")[1])
+            payment = await db_execute(
+                "SELECT user_id, amount, type, payment_method, description FROM payments WHERE id = %s",
+                (payment_id,), fetchone=True
+            )
+            if payment:
+                user_id, amount, ptype, payment_method, description = payment
+                await update_payment_status(payment_id, "approved")
+                if ptype == "increase_balance":
+                    await add_balance(user_id, amount)
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"✅ پرداخت شما به مبلغ {amount} تومان تایید شد و به موجودی شما اضافه شد."
+                    )
+                elif ptype == "buy_subscription":
+                    await query.message.reply_text(
+                        "✅ پرداخت برای اشتراک تایید شد، لطفا کانفیگ را ارسال کنید:",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
+                        ])
+                    )
+                    user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"✅ پرداخت شما برای اشتراک ({description}) تایید شد. حداکثر تا ۱ ساعت دیگر کانفیگ برای شما ارسال خواهد شد."
+                    )
+                elif ptype == "agency_request":
+                    await set_user_agent(user_id)
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text="🎉 درخواست نمایندگی شما تایید شد! از این پس می‌توانید از تخفیف‌های ویژه نمایندگی استفاده کنید."
+                    )
+                await query.message.edit_reply_markup(reply_markup=None)
+                logging.info(f"Payment {payment_id} approved by admin for user_id {user_id}")
+            else:
+                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+                await query.message.edit_reply_markup(reply_markup=None)
+        except Exception as e:
+            logging.error(f"Error approving payment {data}: {e}")
+            await query.message.reply_text(f"⚠️ خطا در تایید پرداخت: {str(e)}")
+            await query.message.edit_reply_markup(reply_markup=None)
 
-# ---------- ثبت هندلرها ----------
-application.add_handler(CommandHandler("start", start_with_param))
-application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
-application.add_handler(CommandHandler("cleardb", clear_db))
-application.add_handler(CommandHandler("stats", stats_command))
-application.add_handler(CommandHandler("numbers", numbers_command))
-application.add_handler(CommandHandler("coupon", coupon_command))
-application.add_handler(CommandHandler("notification", notification_command))
-application.add_handler(CommandHandler("backup", backup_command))
-application.add_handler(CommandHandler("restore", restore_command))
-application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
-application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
-application.add_handler(CallbackQueryHandler(admin_callback_handler))
+    elif data.startswith("reject_"):
+        try:
+            payment_id = int(data.split("_")[1])
+            payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            if payment:
+                user_id, description = payment
+                await update_payment_status(payment_id, "rejected")
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"❌ پرداخت شما برای {'اشتراک' if 'buy_subscription' in payment_id else 'افزایش موجودی'} ({description}) رد شد. لطفا با پشتیبانی تماس بگیرید."
+                )
+                await query.message.edit_reply_markup(reply_markup=None)
+                logging.info(f"Payment {payment_id} rejected by admin for user_id {user_id}")
+            else:
+                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+                await query.message.edit_reply_markup(reply_markup=None)
+        except Exception as e:
+            logging.error(f"Error rejecting payment {data}: {e}")
+            await query.message.reply_text(f"⚠️ خطا در رد پرداخت: {str(e)}")
+            await query.message.edit_reply_markup(reply_markup=None)
 
-# ---------- webhook endpoint ----------
+    elif data.startswith("send_config_"):
+        try:
+            payment_id = int(data.split("_")[2])
+            payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            if payment:
+                user_id, description = payment
+                await query.message.reply_text(f"🟣 لطفا کانفیگ برای اشتراک ({description}) را ارسال کنید:")
+                user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
+                await query.message.edit_reply_markup(reply_markup=None)
+            else:
+                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+                await query.message.edit_reply_markup(reply_markup=None)
+        except Exception as e:
+            logging.error(f"Error initiating config send for payment {data}: {e}")
+            await query.message.reply_text(f"⚠️ خطا در ارسال کانفیگ: {str(e)}")
+            await query.message.edit_reply_markup(reply_markup=None)
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.error(f"Update {update} caused error {context.error}")
+    if update and update.effective_user:
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_user.id,
+                text="⚠️ خطایی رخ داد. لطفا دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
+                reply_markup=get_main_keyboard()
+            )
+        except Exception as e:
+            logging.error(f"Error sending error message to user: {e}")
+
+# ---------- Webhook و FastAPI routes ----------
 @app.post(WEBHOOK_PATH)
-async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.update_queue.put(update)
-    return {"ok": True}
+async def webhook(request: Request):
+    update = Update.de_json(await request.json(), application.bot)
+    await application.process_update(update)
+    return {"status": "ok"}
 
-# ---------- lifecycle events ----------
-@app.on_event("startup")
-async def on_startup():
-    init_db_pool()
-    await create_tables()
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+async def start_application():
     try:
-        await application.bot.set_webhook(url=WEBHOOK_URL)
-        logging.info("Webhook set successfully")
+        init_db_pool()
+        await create_tables()
+        await application.initialize()
+        await set_bot_commands()
+        
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
+        application.add_handler(CallbackQueryHandler(callback_handler))
+        application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
+        application.add_handler(CommandHandler("cleardb", clear_db))
+        application.add_handler(CommandHandler("stats", stats_command))
+        application.add_handler(CommandHandler("numbers", numbers_command))
+        application.add_handler(CommandHandler("coupon", coupon_command))
+        application.add_handler(CommandHandler("notification", notification_command))
+        application.add_handler(CommandHandler("backup", backup_command))
+        application.add_handler(CommandHandler("restore", restore_command))
+        application.add_handler(CommandHandler("change_user_type", change_user_type))
+        application.add_handler(CommandHandler("balance_management", balance_management))
+        application.add_handler(CommandHandler("set_balance", set_balance))
+        application.add_error_handler(error_handler)
+        
+        await application.bot.set_webhook(WEBHOOK_URL)
+        await application.start()
+        logging.info("Application started with webhook")
     except Exception as e:
-        logging.error(f"Error setting webhook: {e}")
-    await set_bot_commands()
-    await application.initialize()
-    await application.start()
-    print("✅ Webhook set:", WEBHOOK_URL)
+        logging.error(f"Error starting application: {e}")
+        raise
 
-@app.on_event("shutdown")
-async def on_shutdown():
+async def stop_application():
     try:
         await application.stop()
-        await application.shutdown()
-    finally:
+        await application.bot.delete_webhook()
         close_db_pool()
+        logging.info("Application stopped and webhook deleted")
+    except Exception as e:
+        logging.error(f"Error stopping application: {e}")
 
-# ---------- اجرای محلی (برای debug) ----------
+# ---------- Main execution ----------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    import atexit
+
+    atexit.register(lambda: asyncio.run(stop_application()))
+    asyncio.run(start_application())
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
