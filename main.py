@@ -172,7 +172,7 @@ async def create_tables():
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
 
-# ---------- دستور جدید برای بکاپ گیری از دیتابیس ----------
+# ---------- دستور جدید برای بکاپ‌گیری از دیتابیس ----------
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
@@ -1551,11 +1551,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
                     reply_markup=get_main_keyboard()
                 )
-        except Exception as e:
-            logging.error(f"Error sending invite image: {e}")
+        except FileNotFoundError:
             await update.message.reply_text(
                 f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
                 "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+                reply_markup=get_main_keyboard()
+            )
+        except Exception as e:
+            logging.error(f"Error sending invite link for user_id {user_id}: {e}")
+            await update.message.reply_text(
+                "⚠️ خطایی در ارسال لینک دعوت رخ داد. لطفاً دوباره تلاش کنید.",
                 reply_markup=get_main_keyboard()
             )
         user_states.pop(user_id, None)
@@ -1565,33 +1570,25 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             subscriptions = await get_user_subscriptions(user_id)
             if not subscriptions:
-                await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
+                await update.message.reply_text(
+                    "📂 شما هیچ اشتراکی ندارید.\nبرای خرید اشتراک، از منو گزینه '💳 خرید اشتراک' را انتخاب کنید.",
+                    reply_markup=get_main_keyboard()
+                )
                 user_states.pop(user_id, None)
                 return
-            
+
+            response = "📂 اشتراک‌های شما:\n\n"
             current_time = datetime.now()
-            response = "📂 لیست کامل اشتراک‌های شما:\n\n"
-            
             for sub in subscriptions:
-                try:
-                    response += f"🔹 اشتراک #{sub['id']}\n"
-                    response += f"📌 پلن: {sub['plan']}\n"
-                    response += f"🆔 کد خرید: #{sub['payment_id']}\n"
-                    response += f"📊 وضعیت: {'✅ فعال' if sub['status'] == 'active' else '⏳ در انتظار'}\n"
-                    
-                    if sub['status'] == "active":
-                        remaining_days = max(0, (sub['end_date'] - current_time).days)
-                        response += f"⏳ زمان باقی‌مانده: {remaining_days} روز\n"
-                        response += f"📅 تاریخ شروع: {sub['start_date'].strftime('%Y-%m-%d %H:%M')}\n"
-                        response += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
-                    
-                    if sub['config']:
-                        response += f"🔐 کانفیگ:\n```\n{sub['config']}\n```\n"
-                    response += "--------------------\n"
-                except Exception as e:
-                    logging.error(f"Error processing subscription {sub['id']} for user_id {user_id}: {e}")
-                    response += f"⚠️ خطا در نمایش اشتراک #{sub['id']}\n--------------------\n"
-                    continue
+                status = "فعال" if sub['status'] == 'active' else "غیرفعال"
+                remaining_days = max(0, (sub['end_date'] - current_time).days)
+                response += f"📋 اشتراک: {sub['plan']}\n"
+                response += f"وضعیت: {status}\n"
+                response += f"زمان باقی‌مانده: {remaining_days} روز\n"
+                response += f"کد خرید: #{sub['payment_id']}\n"
+                if sub['config']:
+                    response += f"🔐 کانفیگ:\n```\n{sub['config']}\n```\n"
+                response += "--------------------\n"
 
             await send_long_message(
                 update.effective_user.id,
@@ -1603,12 +1600,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states.pop(user_id, None)
         except Exception as e:
             logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
-            await update.message.reply_text("⚠️ خطایی در نمایش اشتراک‌ها رخ داد. لطفاً دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            await update.message.reply_text(
+                "⚠️ خطایی در نمایش اشتراک‌ها رخ داد. لطفاً دوباره تلاش کنید.",
+                reply_markup=get_main_keyboard()
+            )
             user_states.pop(user_id, None)
         return
 
     if text == "💡 راهنمای اتصال":
-        await update.message.reply_text("📚 سیستم‌عامل خود را انتخاب کنید:", reply_markup=get_connection_guide_keyboard())
+        await update.message.reply_text(
+            "📚 سیستم‌عامل خود را انتخاب کنید:",
+            reply_markup=get_connection_guide_keyboard()
+        )
         user_states.pop(user_id, None)
         return
 
@@ -1650,7 +1653,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "لینک مستندات:\nhttps://t.me/teazvpn/126"
             )
         }
-        await update.message.reply_text(guides[text], reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update.message.reply_text(
+            guides[text],
+            reply_markup=get_main_keyboard(),
+            parse_mode="Markdown"
+        )
         user_states.pop(user_id, None)
         return
 
@@ -1674,7 +1681,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if payment_id:
             user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
         else:
-            await update.message.reply_text("⚠️ خطا در ثبت درخواست. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            await update.message.reply_text(
+                "⚠️ خطا در ثبت درخواست. لطفا دوباره تلاش کنید.",
+                reply_markup=get_main_keyboard()
+            )
             user_states.pop(user_id, None)
         return
 
@@ -1735,7 +1745,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("reject_"):
         try:
             payment_id = int(data.split("_")[1])
-            payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            payment = await db_execute(
+                "SELECT user_id, description FROM payments WHERE id = %s",
+                (payment_id,), fetchone=True
+            )
             if payment:
                 user_id, description = payment
                 await update_payment_status(payment_id, "rejected")
@@ -1756,10 +1769,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("send_config_"):
         try:
             payment_id = int(data.split("_")[2])
-            payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            payment = await db_execute(
+                "SELECT user_id, description FROM payments WHERE id = %s",
+                (payment_id,), fetchone=True
+            )
             if payment:
                 user_id, description = payment
-                await query.message.reply_text(f"🟣 لطفا کانفیگ برای اشتراک ({description}) را ارسال کنید:")
+                await query.message.reply_text(
+                    f"🟣 لطفا کانفیگ برای اشتراک ({description}) را ارسال کنید:"
+                )
                 user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
                 await query.message.edit_reply_markup(reply_markup=None)
             else:
@@ -1785,9 +1803,21 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- Webhook و FastAPI routes ----------
 @app.post(WEBHOOK_PATH)
 async def webhook(request: Request):
-    update = Update.de_json(await request.json(), application.bot)
-    await application.process_update(update)
-    return {"status": "ok"}
+    global application
+    if application is None:
+        logging.error("Application is not initialized")
+        return {"status": "error", "message": "Application not initialized"}
+    try:
+        update = Update.de_json(await request.json(), application.bot)
+        if update:
+            await application.process_update(update)
+            return {"status": "ok"}
+        else:
+            logging.error("Invalid update received")
+            return {"status": "error", "message": "Invalid update"}
+    except Exception as e:
+        logging.error(f"Error processing webhook: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.get("/health")
 async def health_check():
@@ -1838,6 +1868,7 @@ async def start_application():
 
 async def stop_application():
     try:
+        global application
         if application is not None:
             await application.stop()
             await application.bot.delete_webhook()
