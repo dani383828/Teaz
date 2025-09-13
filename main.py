@@ -835,13 +835,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     username = user.username or ""
+    logger.debug(f"Received /start from user_id: {user_id}, username: {username}")
 
     if not await is_user_member(user_id):
-        kb = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]]
+        kb = [[InlineKeyboardButton(f"📢 عضویت در {channel}", url=f"https://t.me/{channel.replace('@','')}")] for channel in CHANNEL_USERNAMES]
         await update.message.reply_text(
-            "❌ برای استفاده از ربات، ابتدا در کانال ما عضو شوید و سپس مجدد /start را بزنید.",
+            "❌ برای استفاده از ربات، ابتدا در کانال‌های ما عضو شوید و سپس مجدد /start را بزنید.",
             reply_markup=InlineKeyboardMarkup(kb)
         )
+        logger.debug(f"User {user_id} not a member of required channels")
         return
 
     invited_by = context.user_data.get("invited_by")
