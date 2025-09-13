@@ -235,15 +235,6 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Error in backup command: {e}")
         await update.message.reply_text(f"⚠️ خطا در تهیه بکاپ: {str(e)}")
 
-# ---------- دستور جدید برای بازیابی دیتابیس ----------
-async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
-        return
-    
-    await update.message.reply_text("📤 لطفا فایل بکاپ دیتابیس را ارسال کنید:")
-    user_states[update.effective_user.id] = "awaiting_backup_file"
-
 # ---------- تابع برای بازیابی دیتابیس از فایل بکاپ ----------
 async def restore_database_from_backup(file_path: str):
     """
@@ -287,6 +278,15 @@ async def restore_database_from_backup(file_path: str):
         logging.error(f"Error restoring database: {e}")
         return False, f"⚠️ خطا در بازیابی دیتابیس: {str(e)}"
 
+# ---------- دستور جدید برای بازیابی دیتابیس ----------
+async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    await update.message.reply_text("📤 لطفا فایل بکاپ دیتابیس را ارسال کنید:")
+    user_states[update.effective_user.id] = "awaiting_backup_file"
+
 # ---------- دستور جدید برای اطلاع رسانی به همه کاربران ----------
 async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -305,39 +305,71 @@ async def coupon_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("💵 مقدار تخفیف را به درصد وارد کنید (مثال: 20):", reply_markup=get_back_keyboard())
     user_states[update.effective_user.id] = "awaiting_coupon_discount"
 
-# ---------- دستور جدید برای نمایش شماره‌ها ----------
-async def numbers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------- دستور جدید برای اطلاعات کاربران ----------
+async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
     
     try:
         users = await db_execute(
-            "SELECT user_id, username, phone FROM users ORDER BY created_at DESC",
+            "SELECT user_id, username, phone, balance, is_agent, created_at FROM users ORDER BY created_at DESC",
             fetch=True
         )
         if not users:
             await update.message.reply_text("📂 هیچ کاربری یافت نشد.")
             return
 
-        response = "📞 لیست شماره‌های کاربران:\n\n"
-        for user in users:
-            user_id, username, phone = user
-            username_display = f"@{username}" if username else f"ID: {user_id}"
-            phone_display = phone if phone else "نامشخص"
-            response += f"کاربر: {username_display}\n"
-            response += f"شماره: {phone_display}\n"
-            response += "--------------------\n"
+        # کیبورد اینلاین برای گزینه‌ها
+        inline_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 افزایش/کاهش موجودی", callback_data="admin_balance_action")],
+            [InlineKeyboardButton("🧑‍💼 تغییر نوع اکانت", callback_data="admin_agent_action")]
+        ])
 
-        await send_long_message(
-            update.effective_user.id,
-            response,
-            context,
-            reply_markup=get_main_keyboard()
-        )
+        response = "👥 لیست کامل اطلاعات کاربران:\n\n"
+        max_length = 4000
+        parts = []
+        current_part = response
+
+        for user in users:
+            user_id, username, phone, balance, is_agent, created_at = user
+            agent_status = "نماینده" if is_agent else "ساده"
+            phone_display = phone if phone else "نامشخص"
+            username_display = f"@{username}" if username else "بدون یوزرنیم"
+            created_at_str = created_at.strftime("%Y-%m-%d %H:%M") if created_at else "نامشخص"
+            
+            user_info = (
+                f"🆔 ایدی عددی: {user_id}\n"
+                f"📛 یوزرنیم: {username_display}\n"
+                f"📞 شماره تلفن: {phone_display}\n"
+                f"💰 موجودی: {balance:,} تومان\n"
+                f"🆙 نوع اکانت: {agent_status}\n"
+                f"📅 تاریخ ایجاد: {created_at_str}\n"
+                "--------------------\n\n"
+            )
+            
+            if len(current_part + user_info) > max_length:
+                parts.append(current_part)
+                current_part = user_info
+            else:
+                current_part += user_info
+
+        if current_part:
+            parts.append(current_part)
+
+        for i, part in enumerate(parts):
+            if i == len(parts) - 1:
+                await context.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=part,
+                    reply_markup=inline_kb if i == 0 else None
+                )
+            else:
+                await context.bot.send_message(chat_id=ADMIN_ID, text=part)
+
     except Exception as e:
-        logging.error(f"Error in numbers_command: {e}")
-        await update.message.reply_text("⚠️ خطایی در نمایش شماره‌ها رخ داد. لطفاً دوباره تلاش کنید.")
+        logging.error(f"Error in user_info_command: {e}")
+        await update.message.reply_text("⚠️ خطایی در نمایش اطلاعات کاربران رخ داد. لطفاً دوباره تلاش کنید.")
 
 # ---------- دستور آمار ربات ----------
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -622,6 +654,13 @@ async def set_user_agent(user_id):
     except Exception as e:
         logging.error(f"Error setting user {user_id} as agent: {e}")
 
+async def unset_user_agent(user_id):
+    try:
+        await db_execute("UPDATE users SET is_agent = FALSE WHERE user_id = %s", (user_id,))
+        logging.info(f"User {user_id} unset as agent")
+    except Exception as e:
+        logging.error(f"Error unsetting user {user_id} as agent: {e}")
+
 async def is_user_agent(user_id):
     try:
         row = await db_execute("SELECT is_agent FROM users WHERE user_id = %s", (user_id,), fetchone=True)
@@ -808,6 +847,9 @@ async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ---------- وضعیت کاربر در مموری ----------
 user_states = {}
 
+def generate_coupon_code(length=8):
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
 # ---------- دستورات و هندلرها ----------
 async def set_bot_commands():
     try:
@@ -819,7 +861,7 @@ async def set_bot_commands():
             BotCommand(command="/debug_subscriptions", description="تشخیص اشتراک‌ها (ادمین)"),
             BotCommand(command="/cleardb", description="پاک کردن دیتابیس (ادمین)"),
             BotCommand(command="/stats", description="آمار ربات (ادمین)"),
-            BotCommand(command="/numbers", description="نمایش شماره‌های کاربران (ادمین)"),
+            BotCommand(command="/user_info", description="اطلاعات کاربران (ادمین)"),
             BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)"),
             BotCommand(command="/notification", description="ارسال اطلاعیه به همه کاربران (ادمین)"),
             BotCommand(command="/backup", description="تهیه بکاپ از دیتابیس (ادمین)"),
@@ -1116,7 +1158,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("⚠️ لطفا یکی از گزینه‌های بالا را انتخاب کنید.", reply_markup=get_coupon_recipient_keyboard())
                 return
-        elif state and state.startswith("awaiting_couton_percent_") and user_id == ADMIN_ID:
+        elif state and state.startswith("awaiting_coupon_percent_") and user_id == ADMIN_ID:
             parts = state.split("_")
             coupon_code = parts[3]
             discount_percent = int(parts[4])
@@ -1245,6 +1287,84 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "❌ ارسال اطلاعیه لغو شد.",
                     reply_markup=get_main_keyboard()
                 )
+            user_states.pop(user_id, None)
+            return
+        # هندلرهای ادمین برای user_info
+        elif state == "awaiting_admin_user_id_for_balance" and user_id == ADMIN_ID:
+            try:
+                target_user_id = int(text)
+                user_exists = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
+                if not user_exists:
+                    await update.message.reply_text("⚠️ کاربر یافت نشد.", reply_markup=get_back_keyboard())
+                    return
+                user_states[user_id] = f"awaiting_balance_amount_{target_user_id}"
+                await update.message.reply_text("💰 مبلغ را وارد کنید (مثبت برای افزایش، منفی برای کاهش):", reply_markup=get_back_keyboard())
+            except ValueError:
+                await update.message.reply_text("⚠️ ایدی عددی نامعتبر است.", reply_markup=get_back_keyboard())
+            return
+        elif state and state.startswith("awaiting_balance_amount_") and user_id == ADMIN_ID:
+            try:
+                parts = state.split("_")
+                target_user_id = int(parts[3])
+                amount = int(text)
+                current_balance = await get_balance(target_user_id)
+                if amount > 0:
+                    await add_balance(target_user_id, amount)
+                    await update.message.reply_text(f"✅ {amount:,} تومان به موجودی کاربر {target_user_id} اضافه شد. موجودی جدید: {current_balance + amount:,} تومان")
+                else:
+                    deduct_amount = abs(amount)
+                    if current_balance >= deduct_amount:
+                        await deduct_balance(target_user_id, deduct_amount)
+                        await update.message.reply_text(f"✅ {deduct_amount:,} تومان از موجودی کاربر {target_user_id} کسر شد. موجودی جدید: {current_balance - deduct_amount:,} تومان")
+                    else:
+                        await update.message.reply_text(f"⚠️ موجودی کاربر {target_user_id} ({current_balance:,} تومان) کافی نیست.")
+                user_states.pop(user_id, None)
+            except ValueError:
+                await update.message.reply_text("⚠️ مبلغ نامعتبر است.", reply_markup=get_back_keyboard())
+            except Exception as e:
+                logging.error(f"Error in balance update: {e}")
+                await update.message.reply_text("⚠️ خطا در به‌روزرسانی موجودی.")
+            return
+        elif state == "awaiting_admin_user_id_for_agent" and user_id == ADMIN_ID:
+            try:
+                target_user_id = int(text)
+                user_exists = await db_execute("SELECT user_id, is_agent FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
+                if not user_exists:
+                    await update.message.reply_text("⚠️ کاربر یافت نشد.", reply_markup=get_back_keyboard())
+                    return
+                current_status, _ = user_exists
+                status_text = "نماینده" if current_status else "ساده"
+                user_states[user_id] = f"awaiting_agent_type_{target_user_id}"
+                await update.message.reply_text(
+                    f"🆔 کاربر {target_user_id} در حال حاضر {status_text} است.\n"
+                    "نوع جدید اکانت را انتخاب کنید:",
+                    reply_markup=ReplyKeyboardMarkup([
+                        [KeyboardButton("ساده")],
+                        [KeyboardButton("نماینده")],
+                        [KeyboardButton("انصراف")]
+                    ], resize_keyboard=True)
+                )
+            except ValueError:
+                await update.message.reply_text("⚠️ ایدی عددی نامعتبر است.", reply_markup=get_back_keyboard())
+            return
+        elif state and state.startswith("awaiting_agent_type_") and user_id == ADMIN_ID:
+            parts = state.split("_")
+            target_user_id = int(parts[3])
+            if text == "ساده":
+                await unset_user_agent(target_user_id)
+                await update.message.reply_text(f"✅ نوع اکانت کاربر {target_user_id} به 'ساده' تغییر یافت.", reply_markup=get_back_keyboard())
+            elif text == "نماینده":
+                await set_user_agent(target_user_id)
+                await update.message.reply_text(f"✅ نوع اکانت کاربر {target_user_id} به 'نماینده' تغییر یافت.", reply_markup=get_back_keyboard())
+            elif text == "انصراف":
+                await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=get_back_keyboard())
+            else:
+                await update.message.reply_text("⚠️ گزینه نامعتبر.", reply_markup=ReplyKeyboardMarkup([
+                    [KeyboardButton("ساده")],
+                    [KeyboardButton("نماینده")],
+                    [KeyboardButton("انصراف")]
+                ], resize_keyboard=True))
+                return
             user_states.pop(user_id, None)
             return
 
@@ -1679,6 +1799,13 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 return
             await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
             user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
+    # هندلرهای کال‌بک برای user_info
+    elif data == "admin_balance_action" and update.effective_user.id == ADMIN_ID:
+        await query.message.reply_text("🆔 ایدی عددی کاربر را وارد کنید:")
+        user_states[ADMIN_ID] = "awaiting_admin_user_id_for_balance"
+    elif data == "admin_agent_action" and update.effective_user.id == ADMIN_ID:
+        await query.message.reply_text("🆔 ایدی عددی کاربر را وارد کنید:")
+        user_states[ADMIN_ID] = "awaiting_admin_user_id_for_agent"
 
 async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
@@ -1696,7 +1823,7 @@ application.add_handler(CommandHandler("start", start_with_param))
 application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
 application.add_handler(CommandHandler("cleardb", clear_db))
 application.add_handler(CommandHandler("stats", stats_command))
-application.add_handler(CommandHandler("numbers", numbers_command))
+application.add_handler(CommandHandler("user_info", user_info_command))
 application.add_handler(CommandHandler("coupon", coupon_command))
 application.add_handler(CommandHandler("notification", notification_command))
 application.add_handler(CommandHandler("backup", backup_command))
