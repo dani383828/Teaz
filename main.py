@@ -14,7 +14,7 @@ from telegram.ext import (
 
 # ---------- تنظیمات اولیه ----------
 TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
-CHANNEL_USERNAME = ["@teazvpn", "@charkhoun"]
+CHANNEL_USERNAME = "@teazvpn"
 ADMIN_ID = 5542927340
 TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
 BANK_CARD = "6037 9975 9717 2684"
@@ -27,8 +27,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-
-logger = logging.getLogger(__name__)
 
 app = FastAPI()
 application = Application.builder().token(TOKEN).build()
@@ -596,11 +594,8 @@ async def mark_coupon_used(code):
 # ---------- توابع DB موجود ----------
 async def is_user_member(user_id):
     try:
-        for channel in CHANNEL_USERNAMES:
-            member = await application.bot.get_chat_member(channel, user_id)
-            if member.status not in ["member", "administrator", "creator"]:
-                return False
-        return True
+        member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in ["member", "administrator", "creator"]
     except Exception:
         return False
 
@@ -840,15 +835,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     username = user.username or ""
-    logger.debug(f"Received /start from user_id: {user_id}, username: {username}")
 
     if not await is_user_member(user_id):
-        kb = [[InlineKeyboardButton(f"📢 عضویت در {channel}", url=f"https://t.me/{channel.replace('@','')}")] for channel in CHANNEL_USERNAMES]
+        kb = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]]
         await update.message.reply_text(
-            "❌ برای استفاده از ربات، ابتدا در کانال‌های ما عضو شوید و سپس مجدد /start را بزنید.",
+            "❌ برای استفاده از ربات، ابتدا در کانال ما عضو شوید و سپس مجدد /start را بزنید.",
             reply_markup=InlineKeyboardMarkup(kb)
         )
-        logger.debug(f"User {user_id} not a member of required channels")
         return
 
     invited_by = context.user_data.get("invited_by")
