@@ -28,6 +28,8 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
@@ -594,8 +596,11 @@ async def mark_coupon_used(code):
 # ---------- توابع DB موجود ----------
 async def is_user_member(user_id):
     try:
-        member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
+        for channel in CHANNEL_USERNAMES:
+            member = await application.bot.get_chat_member(channel, user_id)
+            if member.status not in ["member", "administrator", "creator"]:
+                return False
+        return True
     except Exception:
         return False
 
