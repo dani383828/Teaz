@@ -29,6 +29,9 @@ logging.basicConfig(
 )
 
 app = FastAPI()
+@app.get("/")
+async def health_check():
+    return {"status": "up", "message": "Bot is running!"}
 application = Application.builder().token(TOKEN).build()
 
 # ---------- PostgreSQL connection pool (psycopg2) ----------
