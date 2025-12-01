@@ -645,7 +645,7 @@ async def ensure_user(user_id, username, invited_by=None):
             if invited_by and invited_by != user_id:
                 inviter = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (invited_by,), fetchone=True)
                 if inviter:
-                    await add_balance(invited_by, 25000)
+                    await add_balance(invited_by, 10000)  # تغییر از 25000 به 10000
         logging.info(f"User {user_id} ensured in database")
     except Exception as e:
         logging.error(f"Error ensuring user {user_id}: {e}")
@@ -934,7 +934,7 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if inviter_exists:
             await context.bot.send_message(
                 chat_id=invited_by,
-                text=f"🎉 دوست شما (@{update.effective_user.username or 'NoUsername'}) با موفقیت مراحل ثبت‌نام را تکمیل کرد!\n💰 ۲۵,۰۰۰ تومان به موجودی شما اضافه شد."
+                text=f"🎉 دوست شما (@{update.effective_user.username or 'NoUsername'}) با موفقیت مراحل ثبت‌نام را تکمیل کرد!\n💰 ۱۰,۰۰۰ تومان به موجودی شما اضافه شد."  # تغییر از ۲۵,۰۰۰ به ۱۰,۰۰۰
             )
 
     await update.message.reply_text(
@@ -1552,14 +1552,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_id=user_id,
                     photo=photo,
                     caption=f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                           "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+                           "برای هر دعوت موفق، ۱۰,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",  # تغییر از ۲۵,۰۰۰ به ۱۰,۰۰۰
                     reply_markup=get_main_keyboard()
                 )
         except Exception as e:
             logging.error(f"Error sending invite image: {e}")
             await update.message.reply_text(
                 f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+                "برای هر دعوت موفق، ۱۰,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",  # تغییر از ۲۵,۰۰۰ به ۱۰,۰۰۰
                 reply_markup=get_main_keyboard()
             )
         user_states.pop(user_id, None)
