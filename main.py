@@ -336,6 +336,14 @@ async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         for user in users:
             user_id, username, phone, balance, is_agent, created_at = user
+            
+            # تعداد کاربرانی که توسط این کاربر دعوت شده‌اند
+            invited_count = await db_execute(
+                "SELECT COUNT(*) FROM users WHERE invited_by = %s",
+                (user_id,), fetchone=True
+            )
+            invited_count = invited_count[0] if invited_count else 0
+            
             agent_status = "نماینده" if is_agent else "ساده"
             phone_display = phone if phone else "نامشخص"
             username_display = f"@{username}" if username else "بدون یوزرنیم"
@@ -348,6 +356,7 @@ async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💰 موجودی: {balance:,} تومان\n"
                 f"🆙 نوع اکانت: {agent_status}\n"
                 f"📅 تاریخ ایجاد: {created_at_str}\n"
+                f"👥 دعوت شدگان: {invited_count} نفر\n"
                 "--------------------\n\n"
             )
             
