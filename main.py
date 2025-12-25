@@ -687,6 +687,32 @@ async def mark_coupon_used(code):
     except Exception as e:
         logging.error(f"Error marking coupon {code} as used: {e}")
 
+# ---------- تابع ارسال اعلان کاربر جدید به ادمین ----------
+async def notify_admin_new_user(user_id, username, invited_by=None):
+    """
+    ارسال پیام به ادمین هنگام ثبت‌نام کاربر جدید
+    """
+    try:
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        username_display = f"@{username}" if username else "بدون یوزرنیم"
+        invited_by_text = f"با دعوت کاربر {invited_by}" if invited_by and invited_by != user_id else "مستقیم"
+        
+        message = (
+            "👤 کاربر جدید به ربات اضافه شد:\n\n"
+            f"🆔 ایدی عددی: {user_id}\n"
+            f"📛 یوزرنیم: {username_display}\n"
+            f"🕒 زمان ثبت‌نام: {current_time}\n"
+            f"🎯 روش ورود: {invited_by_text}"
+        )
+        
+        await application.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=message
+        )
+        logging.info(f"Admin notified about new user: {user_id} (@{username})")
+    except Exception as e:
+        logging.error(f"Error notifying admin about new user {user_id}: {e}")
+
 # ---------- توابع DB موجود ----------
 async def is_user_member(user_id):
     try:
@@ -697,16 +723,24 @@ async def is_user_member(user_id):
 
 async def ensure_user(user_id, username, invited_by=None):
     try:
+        # بررسی آیا کاربر قبلاً ثبت‌نام کرده است
         row = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,), fetchone=True)
         if not row:
+            # کاربر جدید - ثبت در دیتابیس
             await db_execute(
                 "INSERT INTO users (user_id, username, invited_by, is_agent) VALUES (%s, %s, %s, FALSE)",
                 (user_id, username, invited_by)
             )
+            
+            # اطلاع به ادمین
+            await notify_admin_new_user(user_id, username, invited_by)
+            
+            # اعتبار برای دعوت‌کننده
             if invited_by and invited_by != user_id:
                 inviter = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (invited_by,), fetchone=True)
                 if inviter:
                     await add_balance(invited_by, 10000)  # تغییر از 25000 به 10000
+                    
         logging.info(f"User {user_id} ensured in database")
     except Exception as e:
         logging.error(f"Error ensuring user {user_id}: {e}")
