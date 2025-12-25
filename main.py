@@ -296,8 +296,19 @@ async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
     
-    await update.message.reply_text("📢 لطفا متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
-    user_states[update.effective_user.id] = "awaiting_notification_text"
+    # نمایش منوی انتخاب نوع اطلاع‌رسانی
+    notification_keyboard = ReplyKeyboardMarkup([
+        [KeyboardButton("1️⃣ پیام به همه کاربران")],
+        [KeyboardButton("2️⃣ پیام به نمایندگان")],
+        [KeyboardButton("3️⃣ پیام به یک نفر")],
+        [KeyboardButton("4️⃣ بازگشت")]
+    ], resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "📢 انتخاب نوع اطلاع‌رسانی:",
+        reply_markup=notification_keyboard
+    )
+    user_states[update.effective_user.id] = "awaiting_notification_type"
 
 # ---------- دستور جدید برای مدیریت کد تخفیف ----------
 async def coupon_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -875,7 +886,7 @@ async def set_bot_commands():
             BotCommand(command="/stats", description="آمار ربات (ادمین)"),
             BotCommand(command="/user_info", description="اطلاعات کاربران (ادمین)"),
             BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)"),
-            BotCommand(command="/notification", description="ارسال اطلاعیه به همه کاربران (ادمین)"),
+            BotCommand(command="/notification", description="ارسال اطلاعیه (ادمین)"),
             BotCommand(command="/backup", description="تهیه بکاپ از دیتابیس (ادمین)"),
             BotCommand(command="/restore", description="بازیابی دیتابیس از بکاپ (ادمین)")
         ]
@@ -901,51 +912,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     invited_by = context.user_data.get("invited_by")
     await ensure_user(user_id, username, invited_by)
 
-    phone = await get_user_phone(user_id)
-    if phone:
-        await update.message.reply_text(
-            "🌐 به فروشگاه تیز VPN خوش آمدید!\n\nیک گزینه را انتخاب کنید:",
-            reply_markup=get_main_keyboard()
-        )
-        user_states.pop(user_id, None)
-        return
-
-    contact_keyboard = ReplyKeyboardMarkup(
-        [[KeyboardButton("ارسال شماره تماس", request_contact=True)]], resize_keyboard=True, one_time_keyboard=True
-    )
+    # حذف درخواست شماره تلفن - ورود اجباری برداشته شد
     await update.message.reply_text(
-        "✅ لطفا شماره تماس خود را ارسال کنید.",
-        reply_markup=contact_keyboard
+        "🌐 به فروشگاه تیز VPN خوش آمدید!\n\nیک گزینه را انتخاب کنید:",
+        reply_markup=get_main_keyboard()
     )
-    user_states[user_id] = "awaiting_contact"
+    user_states.pop(user_id, None)
 
 async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # این هندلر دیگر استفاده نمی‌شود
     user_id = update.effective_user.id
-    if user_states.get(user_id) != "awaiting_contact":
-        return
-    contact = update.message.contact
-    if contact is None or contact.user_id != user_id:
-        await update.message.reply_text("⚠️ لطفا شماره تماس خود را از طریق دکمه ارسال کنید.")
-        return
-
-    phone_number = contact.phone_number
-    await save_user_phone(user_id, phone_number)
-
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"📞 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) شماره تماس خود را ارسال کرد:\n{phone_number}"
-    )
-
-    row = await db_execute("SELECT invited_by FROM users WHERE user_id = %s", (user_id,), fetchone=True)
-    invited_by = row[0] if row and row[0] else None
-    if invited_by and invited_by != user_id:
-        inviter_exists = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (invited_by,), fetchone=True)
-        if inviter_exists:
-            await context.bot.send_message(
-                chat_id=invited_by,
-                text=f"🎉 دوست شما (@{update.effective_user.username or 'NoUsername'}) با موفقیت مراحل ثبت‌نام را تکمیل کرد!\n💰 ۱۰,۰۰۰ تومان به موجودی شما اضافه شد."  # تغییر از ۲۵,۰۰۰ به ۱۰,۰۰۰
-            )
-
     await update.message.reply_text(
         "🌐 به فروشگاه تیز VPN خوش آمدید!\n\nیک گزینه را انتخاب کنید:",
         reply_markup=get_main_keyboard()
@@ -956,19 +932,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
-    if user_states.get(user_id) == "awaiting_contact":
-        contact_keyboard = ReplyKeyboardMarkup(
-            [[KeyboardButton("ارسال شماره تماس", request_contact=True)]], 
-            resize_keyboard=True, 
-            one_time_keyboard=True
-        )
-        await update.message.reply_text(
-            "⚠️ لطفا ابتدا شماره تماس خود را از طریق دکمه ارسال کنید.",
-            reply_markup=contact_keyboard
-        )
-        return
-
-    if text in ["بازگشت به منو", "⬅️ بازگشت به منو"]:
+    if text in ["بازگشت به منو", "⬅️ بازگشت به منو", "4️⃣ بازگشت"]:
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
         return
@@ -1245,62 +1209,178 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_payment_method_keyboard()
             )
             return
-        elif state == "awaiting_notification_text" and user_id == ADMIN_ID:
-            notification_text = text
-            await update.message.reply_text(
-                "📢 آیا مطمئن هستید که می‌خواهید این اطلاعیه را برای همه کاربران ارسال کنید؟",
-                reply_markup=ReplyKeyboardMarkup([
-                    [KeyboardButton("✅ بله، ارسال کن")],
-                    [KeyboardButton("❌ خیر، انصراف")]
-                ], resize_keyboard=True)
-            )
-            user_states[user_id] = f"confirm_notification_{notification_text}"
-            return
-        elif state and state.startswith("confirm_notification_") and user_id == ADMIN_ID:
-            notification_text = state.split("_", 2)[2]
-            if text == "✅ بله، ارسال کن":
-                try:
-                    users = await db_execute("SELECT user_id FROM users", fetch=True)
-                    if not users:
-                        await update.message.reply_text(
-                            "⚠️ هیچ کاربری یافت نشد.",
-                            reply_markup=get_main_keyboard()
-                        )
-                        user_states.pop(user_id, None)
-                        return
-                    
-                    sent_count = 0
-                    failed_count = 0
-                    for user in users:
-                        try:
-                            await context.bot.send_message(
-                                chat_id=user[0],
-                                text=f"📢 اطلاعیه از مدیریت:\n\n{notification_text}"
-                            )
-                            sent_count += 1
-                        except Exception as e:
-                            logging.error(f"Error sending notification to user_id {user[0]}: {e}")
-                            failed_count += 1
-                            continue
-                    
-                    await update.message.reply_text(
-                        f"✅ اطلاعیه با موفقیت به {sent_count} کاربر ارسال شد.\n"
-                        f"❌ تعداد کاربرانی که دریافت نکردند: {failed_count}",
-                        reply_markup=get_main_keyboard()
-                    )
-                except Exception as e:
-                    logging.error(f"Error sending notifications: {e}")
-                    await update.message.reply_text(
-                        "⚠️ خطا در ارسال اطلاعیه به کاربران.",
-                        reply_markup=get_main_keyboard()
-                    )
+        # هندلر جدید برای انتخاب نوع اطلاع‌رسانی
+        elif state == "awaiting_notification_type" and user_id == ADMIN_ID:
+            if text == "1️⃣ پیام به همه کاربران":
+                user_states[user_id] = "awaiting_notification_all"
+                await update.message.reply_text(
+                    "📢 لطفا متن اطلاع‌رسانی را برای همه کاربران ارسال کنید:",
+                    reply_markup=get_back_keyboard()
+                )
+                return
+            elif text == "2️⃣ پیام به نمایندگان":
+                user_states[user_id] = "awaiting_notification_agents"
+                await update.message.reply_text(
+                    "🧑‍💼 لطفا متن اطلاع‌رسانی را برای نمایندگان ارسال کنید:",
+                    reply_markup=get_back_keyboard()
+                )
+                return
+            elif text == "3️⃣ پیام به یک نفر":
+                user_states[user_id] = "awaiting_notification_target"
+                await update.message.reply_text(
+                    "🆔 لطفا ایدی عددی کاربر را وارد کنید:",
+                    reply_markup=get_back_keyboard()
+                )
+                return
+            elif text == "4️⃣ بازگشت":
+                await update.message.reply_text(
+                    "🌐 منوی اصلی:",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+                return
             else:
+                await update.message.reply_text(
+                    "⚠️ لطفا یکی از گزینه‌های بالا را انتخاب کنید.",
+                    reply_markup=ReplyKeyboardMarkup([
+                        [KeyboardButton("1️⃣ پیام به همه کاربران")],
+                        [KeyboardButton("2️⃣ پیام به نمایندگان")],
+                        [KeyboardButton("3️⃣ پیام به یک نفر")],
+                        [KeyboardButton("4️⃣ بازگشت")]
+                    ], resize_keyboard=True)
+                )
+                return
+        # هندلر برای دریافت ایدی کاربر در اطلاع‌رسانی به یک نفر
+        elif state == "awaiting_notification_target" and user_id == ADMIN_ID:
+            if text.isdigit():
+                target_user_id = int(text)
+                user_exists = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
+                if not user_exists:
+                    await update.message.reply_text("⚠️ کاربر یافت نشد. لطفا ایدی معتبر وارد کنید:", reply_markup=get_back_keyboard())
+                    return
+                user_states[user_id] = f"awaiting_notification_single_{target_user_id}"
+                await update.message.reply_text(
+                    f"📤 لطفا متن اطلاع‌رسانی را برای کاربر با ایدی {target_user_id} ارسال کنید:",
+                    reply_markup=get_back_keyboard()
+                )
+            else:
+                await update.message.reply_text("⚠️ لطفا ایدی عددی معتبر وارد کنید:", reply_markup=get_back_keyboard())
+            return
+        # هندلر برای دریافت متن اطلاع‌رسانی و ارسال آن
+        elif state in ["awaiting_notification_all", "awaiting_notification_agents", "awaiting_notification_single"] and user_id == ADMIN_ID:
+            notification_text = text
+            
+            if state == "awaiting_notification_single":
+                # استخراج target_user_id از استیت
+                current_state = user_states.get(user_id)
+                if current_state and current_state.startswith("awaiting_notification_single_"):
+                    target_user_id = int(current_state.split("_")[-1])
+                    await update.message.reply_text(
+                        f"📤 آیا مطمئن هستید که می‌خواهید این اطلاعیه را برای کاربر با ایدی {target_user_id} ارسال کنید؟",
+                        reply_markup=ReplyKeyboardMarkup([
+                            [KeyboardButton("✅ بله، ارسال کن")],
+                            [KeyboardButton("❌ خیر، انصراف")]
+                        ], resize_keyboard=True)
+                    )
+                    user_states[user_id] = f"confirm_notification_single_{target_user_id}_{notification_text}"
+                    return
+                else:
+                    await update.message.reply_text("⚠️ خطا در دریافت اطلاعات کاربر.", reply_markup=get_main_keyboard())
+                    user_states.pop(user_id, None)
+                    return
+            else:
+                target_type = "همه کاربران" if state == "awaiting_notification_all" else "نمایندگان"
+                await update.message.reply_text(
+                    f"📢 آیا مطمئن هستید که می‌خواهید این اطلاعیه را برای {target_type} ارسال کنید؟",
+                    reply_markup=ReplyKeyboardMarkup([
+                        [KeyboardButton("✅ بله، ارسال کن")],
+                        [KeyboardButton("❌ خیر، انصراف")]
+                    ], resize_keyboard=True)
+                )
+                user_states[user_id] = f"confirm_notification_{state}_{notification_text}"
+                return
+        # هندلر برای تایید نهایی و ارسال اطلاع‌رسانی
+        elif state and state.startswith("confirm_notification_") and user_id == ADMIN_ID:
+            if text == "❌ خیر، انصراف":
                 await update.message.reply_text(
                     "❌ ارسال اطلاعیه لغو شد.",
                     reply_markup=get_main_keyboard()
                 )
-            user_states.pop(user_id, None)
-            return
+                user_states.pop(user_id, None)
+                return
+            elif text == "✅ بله، ارسال کن":
+                parts = state.split("_", 2)
+                notification_type = parts[1]
+                notification_text = parts[2]
+                
+                if notification_type == "single":
+                    # ارسال به یک کاربر خاص
+                    single_parts = state.split("_")
+                    target_user_id = int(single_parts[3])
+                    notification_text = "_".join(single_parts[4:])
+                    
+                    try:
+                        await context.bot.send_message(
+                            chat_id=target_user_id,
+                            text=f"📢 اطلاعیه از مدیریت:\n\n{notification_text}"
+                        )
+                        await update.message.reply_text(
+                            f"✅ اطلاعیه با موفقیت به کاربر با ایدی {target_user_id} ارسال شد.",
+                            reply_markup=get_main_keyboard()
+                        )
+                    except Exception as e:
+                        logging.error(f"Error sending notification to user_id {target_user_id}: {e}")
+                        await update.message.reply_text(
+                            f"⚠️ خطا در ارسال اطلاعیه به کاربر با ایدی {target_user_id}.",
+                            reply_markup=get_main_keyboard()
+                        )
+                    user_states.pop(user_id, None)
+                    return
+                else:
+                    # ارسال به گروهی از کاربران
+                    try:
+                        if notification_type == "awaiting_notification_all":
+                            users = await db_execute("SELECT user_id FROM users", fetch=True)
+                            target_name = "همه کاربران"
+                        else:  # awaiting_notification_agents
+                            users = await db_execute("SELECT user_id FROM users WHERE is_agent = TRUE", fetch=True)
+                            target_name = "نمایندگان"
+                        
+                        if not users:
+                            await update.message.reply_text(
+                                f"⚠️ هیچ کاربری ({target_name}) یافت نشد.",
+                                reply_markup=get_main_keyboard()
+                            )
+                            user_states.pop(user_id, None)
+                            return
+                        
+                        sent_count = 0
+                        failed_count = 0
+                        for user in users:
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=user[0],
+                                    text=f"📢 اطلاعیه از مدیریت:\n\n{notification_text}"
+                                )
+                                sent_count += 1
+                            except Exception as e:
+                                logging.error(f"Error sending notification to user_id {user[0]}: {e}")
+                                failed_count += 1
+                                continue
+                        
+                        await update.message.reply_text(
+                            f"✅ اطلاعیه با موفقیت به {sent_count} کاربر ({target_name}) ارسال شد.\n"
+                            f"❌ تعداد کاربرانی که دریافت نکردند: {failed_count}",
+                            reply_markup=get_main_keyboard()
+                        )
+                    except Exception as e:
+                        logging.error(f"Error sending notifications: {e}")
+                        await update.message.reply_text(
+                            "⚠️ خطا در ارسال اطلاعیه به کاربران.",
+                            reply_markup=get_main_keyboard()
+                        )
+                    user_states.pop(user_id, None)
+                    return
         # هندلرهای ادمین برای user_info
         elif state == "awaiting_admin_user_id_for_balance" and user_id == ADMIN_ID:
             try:
