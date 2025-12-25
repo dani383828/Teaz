@@ -1114,7 +1114,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_notification_target_user(update, context, user_id, text)
         return
     
-    elif state in ["awaiting_notification_text_all", "awaiting_notification_text_agents"] or state.startswith("awaiting_notification_text_single_"):
+    elif (state in ["awaiting_notification_text_all", "awaiting_notification_text_agents"] or 
+          (state and state.startswith("awaiting_notification_text_single_"))):
         await handle_notification_text(update, context, user_id, state, text)
         return
     
@@ -1194,7 +1195,7 @@ async def process_config(update, context, user_id, payment_id):
                 text=f"✅ کانفیگ اشتراک شما ({description})\nکد خرید: #{payment_id}\nدریافت شد:\n```\n{config}\n```",
                 parse_mode="Markdown"
             )
-            await update.message.reply_text("✅ کانفیگ با موفقیت به خریدار ارسال شد.", reply_markup=None)
+            await update.message.reply_text("✅ کانفیگ با موفقیت به خریدار ارسال شد.", reply_markup=get_main_keyboard())
         else:
             await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.", reply_markup=get_back_keyboard())
             
