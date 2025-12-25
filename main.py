@@ -348,7 +348,7 @@ async def coupon_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
     
-    await update.message.reply_text("💵 مقدار تخفیف را به درصد وارد کنید (مثال: 20):", reply_markup=get_back_keyboard())
+    await update.message.reply_text("💵 مقدار تخفیف را به درصد وارد کنید (مثال: 20):")
     user_states[update.effective_user.id] = "awaiting_coupon_discount"
 
 # ---------- دستور جدید برای اطلاعات کاربران ----------
@@ -997,6 +997,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
 
+    # پاک کردن وضعیت کاربر وقتی از منوی اصلی استفاده می‌کند
     if text in ["بازگشت به منو", "⬅️ بازگشت به منو"]:
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
@@ -1043,6 +1044,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.message.photo or update.message.document or update.message.text:
         state = user_states.get(user_id)
+        
+        # پردازش فیش‌های پرداخت
         if state and (
             state.startswith("awaiting_deposit_receipt_") or 
             state.startswith("awaiting_subscription_receipt_") or 
@@ -1077,6 +1080,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("✅ فیش شما برای ادمین ارسال شد، لطفا منتظر تایید باشید.", reply_markup=get_main_keyboard())
                     user_states.pop(user_id, None)
                     return
+        
+        # پردازش کانفیگ توسط ادمین
         elif state and state.startswith("awaiting_config_"):
             try:
                 payment_id = int(state.split("_")[-1])
@@ -1100,6 +1105,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.")
                     return
+        
+        # پردازش دستورات ادمین برای کوپن
         elif state == "awaiting_coupon_discount" and user_id == ADMIN_ID:
             if text.isdigit():
                 discount_percent = int(text)
@@ -1116,6 +1123,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("⚠️ لطفا یک عدد معتبر وارد کنید.", reply_markup=get_back_keyboard())
             return
+        
         elif state and state.startswith("awaiting_coupon_recipient_") and user_id == ADMIN_ID:
             parts = state.split("_")
             coupon_code = parts[3]
@@ -1158,6 +1166,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     user_states.pop(user_id, None)
                 return
+            
             elif text == "👤 برای یک نفر":
                 target_user_id = 6056483071  # کاربر مشخص‌شده
                 user = await db_execute(
@@ -1192,13 +1201,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     user_states.pop(user_id, None)
                 return
+            
             elif text == "🎯 درصد خاصی از کاربران":
                 user_states[user_id] = f"awaiting_coupon_percent_{coupon_code}_{discount_percent}"
                 await update.message.reply_text("📊 درصد کاربران را وارد کنید (مثال: 20):", reply_markup=get_back_keyboard())
                 return
+            
             else:
                 await update.message.reply_text("⚠️ لطفا یکی از گزینه‌های بالا را انتخاب کنید.", reply_markup=get_coupon_recipient_keyboard())
                 return
+        
         elif state and state.startswith("awaiting_coupon_percent_") and user_id == ADMIN_ID:
             parts = state.split("_")
             coupon_code = parts[3]
@@ -1249,16 +1261,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("⚠️ لطفا یک عدد معتبر وارد کنید.", reply_markup=get_back_keyboard())
             return
+        
+        # پردازش کد تخفیف توسط کاربر عادی
         elif state and state.startswith("awaiting_coupon_code_"):
             parts = state.split("_")
             amount = int(parts[3])
             plan = "_".join(parts[4:]) if len(parts) <= 5 else "_".join(parts[4:-1])
-            coupon_code = parts[-1] if len(parts) > 5 else None
             
             if text == "ادامه":
                 user_states[user_id] = f"awaiting_payment_method_{amount}_{plan}"
                 await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
                 return
+            
             coupon_code = text.strip()
             discount_percent, error = await validate_coupon(coupon_code, user_id)
             if error:
@@ -1267,6 +1281,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
                 )
                 return
+            
             discounted_amount = int(amount * (1 - discount_percent / 100))
             user_states[user_id] = f"awaiting_payment_method_{discounted_amount}_{plan}_{coupon_code}"
             await update.message.reply_text(
@@ -1275,7 +1290,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # بخش اصلی اصلاح شده - اطلاع‌رسانی
+        # پردازش اطلاع‌رسانی توسط ادمین
         elif state == "awaiting_notification_type" and user_id == ADMIN_ID:
             if text == "📢 پیام به همه کاربران":
                 user_states[user_id] = "awaiting_notification_text_all"
@@ -1308,7 +1323,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("⚠️ ایدی عددی نامعتبر است. لطفا دوباره تلاش کنید:", reply_markup=get_back_keyboard())
                 return
         
-        elif state in ["awaiting_notification_text_all", "awaiting_notification_text_agents", "awaiting_notification_text_single"] or state.startswith("awaiting_notification_text_single_"):
+        elif state in ["awaiting_notification_text_all", "awaiting_notification_text_agents"] or state.startswith("awaiting_notification_text_single_"):
             notification_text = text
             
             if state == "awaiting_notification_text_all":
@@ -1318,7 +1333,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 notification_type = "agents"
                 user_type = "نمایندگان"
             elif state.startswith("awaiting_notification_text_single_"):
-                target_user_id = state.split("_")[-1] if "_" in state else ""
+                target_user_id = state.split("_")[-1]
                 notification_type = f"single_{target_user_id}"
                 user_type = f"کاربر {target_user_id}"
             else:
@@ -1439,6 +1454,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 await update.message.reply_text("⚠️ ایدی عددی نامعتبر است.", reply_markup=get_back_keyboard())
             return
+        
         elif state and state.startswith("awaiting_balance_amount_") and user_id == ADMIN_ID:
             try:
                 parts = state.split("_")
@@ -1462,6 +1478,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logging.error(f"Error in balance update: {e}")
                 await update.message.reply_text("⚠️ خطا در به‌روزرسانی موجودی.")
             return
+        
         elif state == "awaiting_admin_user_id_for_agent" and user_id == ADMIN_ID:
             try:
                 target_user_id = int(text)
@@ -1484,6 +1501,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 await update.message.reply_text("⚠️ ایدی عددی نامعتبر است.", reply_markup=get_back_keyboard())
             return
+        
         elif state and state.startswith("awaiting_agent_type_") and user_id == ADMIN_ID:
             parts = state.split("_")
             target_user_id = int(parts[3])
@@ -1505,15 +1523,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states.pop(user_id, None)
             return
 
+    # ---------- پردازش دستورات اصلی ----------
+    # پاک کردن وضعیت کاربر وقتی از منوی اصلی استفاده می‌کند
+    if text in ["💰 موجودی", "💳 خرید اشتراک", "🎁 اشتراک تست رایگان", "☎️ پشتیبانی", 
+                "💵 اعتبار رایگان", "📂 اشتراک‌های من", "💡 راهنمای اتصال", "🧑‍💼 درخواست نمایندگی"]:
+        user_states.pop(user_id, None)
+    
     if text == "💰 موجودی":
         await update.message.reply_text("💰 بخش موجودی:\nیک گزینه را انتخاب کنید:", reply_markup=get_balance_keyboard())
-        user_states.pop(user_id, None)
         return
 
     if text == "نمایش موجودی":
         bal = await get_balance(user_id)
         await update.message.reply_text(f"💰 موجودی شما: {bal} تومان", reply_markup=get_balance_keyboard())
-        user_states.pop(user_id, None)
         return
 
     if text == "افزایش موجودی":
@@ -1544,7 +1566,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "💳 خرید اشتراک":
         is_agent = await is_user_agent(user_id)
         await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent))
-        user_states.pop(user_id, None)
         return
 
     if text in [
@@ -1670,12 +1691,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🎁 برای دریافت اشتراک تست رایگان، لطفا با پشتیبانی تماس بگیرید: https://t.me/teazadmin",
             reply_markup=get_main_keyboard()
         )
-        user_states.pop(user_id, None)
         return
 
     if text == "☎️ پشتیبانی":
         await update.message.reply_text("📞 پشتیبانی: https://t.me/teazadmin", reply_markup=get_main_keyboard())
-        user_states.pop(user_id, None)
         return
 
     if text == "💵 اعتبار رایگان":
@@ -1686,17 +1705,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_id=user_id,
                     photo=photo,
                     caption=f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                           "برای هر دعوت موفق، ۱۰,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",  # تغییر از ۲۵,۰۰۰ به ۱۰,۰۰۰
+                           "برای هر دعوت موفق، ۱۰,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
                     reply_markup=get_main_keyboard()
                 )
         except Exception as e:
             logging.error(f"Error sending invite image: {e}")
             await update.message.reply_text(
                 f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
-                "برای هر دعوت موفق، ۱۰,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",  # تغییر از ۲۵,۰۰۰ به ۱۰,۰۰۰
+                "برای هر دعوت موفق، ۱۰,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
                 reply_markup=get_main_keyboard()
             )
-        user_states.pop(user_id, None)
         return
 
     if text == "📂 اشتراک‌های من":
@@ -1704,7 +1722,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             subscriptions = await get_user_subscriptions(user_id)
             if not subscriptions:
                 await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
-                user_states.pop(user_id, None)
                 return
             
             current_time = datetime.now()
@@ -1738,7 +1755,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
             await update.message.reply_text("⚠️ خطا در نمایش اشتراک‌ها. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
         
-        user_states.pop(user_id, None)
         return
 
     if text == "💡 راهنمای اتصال":
@@ -1746,7 +1762,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "راهنمای راه‌اندازی\nدستگاه خود را انتخاب کنید:",
             reply_markup=get_connection_guide_keyboard()
         )
-        user_states.pop(user_id, None)
         return
 
     if text == "📗 اندروید":
@@ -1755,7 +1770,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
             reply_markup=get_connection_guide_keyboard()
         )
-        user_states.pop(user_id, None)
         return
 
     if text == "📕 آیفون/مک":
@@ -1764,7 +1778,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
             reply_markup=get_connection_guide_keyboard()
         )
-        user_states.pop(user_id, None)
         return
 
     if text == "📘 ویندوز":
@@ -1773,7 +1786,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
             reply_markup=get_connection_guide_keyboard()
         )
-        user_states.pop(user_id, None)
         return
 
     if text == "📙 لینوکس":
@@ -1782,14 +1794,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
             reply_markup=get_connection_guide_keyboard()
         )
-        user_states.pop(user_id, None)
         return
 
     if text == "🧑‍💼 درخواست نمایندگی":
         is_agent = await is_user_agent(user_id)
         if is_agent:
             await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent=True))
-            user_states.pop(user_id, None)
             return
 
         agency_text = (
@@ -1936,10 +1946,12 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 return
             await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
             user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
+    
     # هندلرهای کال‌بک برای user_info
     elif data == "admin_balance_action" and update.effective_user.id == ADMIN_ID:
         await query.message.reply_text("🆔 ایدی عددی کاربر را وارد کنید:")
         user_states[ADMIN_ID] = "awaiting_admin_user_id_for_balance"
+    
     elif data == "admin_agent_action" and update.effective_user.id == ADMIN_ID:
         await query.message.reply_text("🆔 ایدی عددی کاربر را وارد کنید:")
         user_states[ADMIN_ID] = "awaiting_admin_user_id_for_agent"
