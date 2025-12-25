@@ -996,8 +996,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text if update.message.text else ""
-
-    # پاک کردن وضعیت کاربر وقتی از منوی اصلی استفاده می‌کند
+    
+    # لاگ وضعیت فعلی کاربر
+    logging.info(f"User {user_id} sent: '{text}', current state: {user_states.get(user_id)}")
+    
+    # پاک کردن وضعیت وقتی کاربر روی "بازگشت به منو" کلیک می‌کند
     if text in ["بازگشت به منو", "⬅️ بازگشت به منو"]:
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
@@ -1042,491 +1045,578 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ لطفا یک فایل بکاپ ارسال کنید.", reply_markup=get_back_keyboard())
             return
 
-    if update.message.photo or update.message.document or update.message.text:
-        state = user_states.get(user_id)
+    # بررسی وضعیت‌های خاص کاربر
+    state = user_states.get(user_id)
+    
+    # پردازش وضعیت‌های مربوط به فیش پرداخت
+    if state and state.startswith("awaiting_deposit_receipt_"):
+        payment_id = int(state.split("_")[-1])
+        await process_payment_receipt(update, context, user_id, payment_id, "deposit")
+        user_states.pop(user_id, None)
+        return
         
-        # پردازش فیش‌های پرداخت
-        if state and (
-            state.startswith("awaiting_deposit_receipt_") or 
-            state.startswith("awaiting_subscription_receipt_") or 
-            state.startswith("awaiting_agency_receipt_")
-        ):
-            try:
-                payment_id = int(state.split("_")[-1])
-            except:
-                payment_id = None
-
-            if payment_id:
-                payment = await db_execute("SELECT amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-                if payment:
-                    amount, ptype, description = payment
-                    caption = f"💳 فیش پرداختی از کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}):\n"
-                    caption += f"مبلغ: {amount}\nنوع: {ptype if ptype != 'agency_request' else 'درخواست نمایندگی'}"
-
-                    keyboard = InlineKeyboardMarkup([
-                        [
-                            InlineKeyboardButton("✅ تایید", callback_data=f"approve_{payment_id}"),
-                            InlineKeyboardButton("❌ رد", callback_data=f"reject_{payment_id}")
-                        ]
-                    ])
-
-                    if update.message.photo:
-                        file_id = update.message.photo[-1].file_id
-                        await context.bot.send_photo(chat_id=ADMIN_ID, photo=file_id, caption=caption, reply_markup=keyboard)
-                    else:
-                        doc_id = update.message.document.file_id
-                        await context.bot.send_document(chat_id=ADMIN_ID, document=doc_id, caption=caption, reply_markup=keyboard)
-
-                    await update.message.reply_text("✅ فیش شما برای ادمین ارسال شد، لطفا منتظر تایید باشید.", reply_markup=get_main_keyboard())
-                    user_states.pop(user_id, None)
-                    return
+    elif state and state.startswith("awaiting_subscription_receipt_"):
+        payment_id = int(state.split("_")[-1])
+        await process_payment_receipt(update, context, user_id, payment_id, "subscription")
+        user_states.pop(user_id, None)
+        return
         
-        # پردازش کانفیگ توسط ادمین
-        elif state and state.startswith("awaiting_config_"):
-            try:
-                payment_id = int(state.split("_")[-1])
-            except:
-                payment_id = None
+    elif state and state.startswith("awaiting_agency_receipt_"):
+        payment_id = int(state.split("_")[-1])
+        await process_payment_receipt(update, context, user_id, payment_id, "agency")
+        user_states.pop(user_id, None)
+        return
 
-            if payment_id:
-                payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-                if payment:
-                    buyer_id, description = payment
-                    if update.message.text:
-                        config = update.message.text
-                        await update_subscription_config(payment_id, config)
-                        await context.bot.send_message(
-                            chat_id=buyer_id,
-                            text=f"✅ کانفیگ اشتراک شما ({description})\nکد خرید: #{payment_id}\nدریافت شد:\n```\n{config}\n```",
-                            parse_mode="Markdown"
-                        )
-                        await update.message.reply_text("✅ کانفیگ با موفقیت به خریدار ارسال شد.", reply_markup=None)
-                        user_states.pop(user_id, None)
-                    else:
-                        await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.")
-                    return
-        
-        # پردازش دستورات ادمین برای کوپن
-        elif state == "awaiting_coupon_discount" and user_id == ADMIN_ID:
-            if text.isdigit():
-                discount_percent = int(text)
-                if 0 < discount_percent <= 100:
-                    coupon_code = generate_coupon_code()
-                    user_states[user_id] = f"awaiting_coupon_recipient_{coupon_code}_{discount_percent}"
-                    await update.message.reply_text(
-                        f"💵 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف ایجاد شد.\nبرای چه کسانی ارسال شود؟",
-                        reply_markup=get_coupon_recipient_keyboard(),
-                        parse_mode="Markdown"
-                    )
-                else:
-                    await update.message.reply_text("⚠️ درصد تخفیف باید بین 1 تا 100 باشد.", reply_markup=get_back_keyboard())
-            else:
-                await update.message.reply_text("⚠️ لطفا یک عدد معتبر وارد کنید.", reply_markup=get_back_keyboard())
-            return
-        
-        elif state and state.startswith("awaiting_coupon_recipient_") and user_id == ADMIN_ID:
-            parts = state.split("_")
-            coupon_code = parts[3]
-            discount_percent = int(parts[4])
-            
-            if text == "📢 برای همه":
-                try:
-                    await create_coupon(coupon_code, discount_percent)
-                    users = await db_execute("SELECT user_id FROM users WHERE is_agent = FALSE", fetch=True)
-                    if not users:
-                        await update.message.reply_text(
-                            "⚠️ هیچ کاربری (غیر از نمایندگان) یافت نشد.",
-                            reply_markup=get_main_keyboard()
-                        )
-                        user_states.pop(user_id, None)
-                        return
-                    sent_count = 0
-                    for user in users:
-                        try:
-                            await context.bot.send_message(
-                                chat_id=user[0],
-                                text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\n⏳ این کد فقط تا ۳ روز اعتبار دارد.\nفقط یک بار قابل استفاده است.",
-                                parse_mode="Markdown"
-                            )
-                            sent_count += 1
-                        except Exception as e:
-                            logging.error(f"Error sending coupon to user_id {user[0]}: {e}")
-                            continue
-                    await update.message.reply_text(
-                        f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر (غیر از نمایندگان) ارسال شد.",
-                        reply_markup=get_main_keyboard(),
-                        parse_mode="Markdown"
-                    )
-                    user_states.pop(user_id, None)
-                except Exception as e:
-                    logging.error(f"Error sending coupons to all users: {e}")
-                    await update.message.reply_text(
-                        "⚠️ خطا در ارسال کد تخفیف برای همه کاربران.",
-                        reply_markup=get_main_keyboard()
-                    )
-                    user_states.pop(user_id, None)
-                return
-            
-            elif text == "👤 برای یک نفر":
-                target_user_id = 6056483071  # کاربر مشخص‌شده
-                user = await db_execute(
-                    "SELECT user_id, is_agent FROM users WHERE user_id = %s",
-                    (target_user_id,), fetchone=True
+    # پردازش کانفیگ توسط ادمین
+    elif state and state.startswith("awaiting_config_"):
+        payment_id = int(state.split("_")[-1])
+        await process_config(update, context, user_id, payment_id)
+        user_states.pop(user_id, None)
+        return
+
+    # پردازش دستورات ادمین برای کوپن
+    elif state == "awaiting_coupon_discount" and user_id == ADMIN_ID:
+        if text.isdigit():
+            discount_percent = int(text)
+            if 1 <= discount_percent <= 100:
+                coupon_code = generate_coupon_code()
+                user_states[user_id] = f"awaiting_coupon_recipient_{coupon_code}_{discount_percent}"
+                await update.message.reply_text(
+                    f"💵 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف ایجاد شد.\nبرای چه کسانی ارسال شود؟",
+                    reply_markup=get_coupon_recipient_keyboard(),
+                    parse_mode="Markdown"
                 )
-                if user:
-                    _, is_agent = user
-                    if is_agent:
-                        await update.message.reply_text(
-                            "⚠️ این کاربر نماینده است و نمی‌تواند کد تخفیف دریافت کند.",
-                            reply_markup=get_main_keyboard()
-                        )
-                        user_states.pop(user_id, None)
-                        return
-                    await create_coupon(coupon_code, discount_percent, target_user_id)
+            else:
+                await update.message.reply_text("⚠️ درصد تخفیف باید بین 1 تا 100 باشد.", reply_markup=get_back_keyboard())
+        else:
+            await update.message.reply_text("⚠️ لطفا یک عدد معتبر وارد کنید.", reply_markup=get_back_keyboard())
+        return
+    
+    elif state and state.startswith("awaiting_coupon_recipient_") and user_id == ADMIN_ID:
+        await handle_coupon_recipient(update, context, user_id, state, text)
+        return
+    
+    elif state and state.startswith("awaiting_coupon_percent_") and user_id == ADMIN_ID:
+        await handle_coupon_percent(update, context, user_id, state, text)
+        return
+
+    # پردازش کد تخفیف توسط کاربر عادی
+    elif state and state.startswith("awaiting_coupon_code_"):
+        await handle_coupon_code(update, context, user_id, state, text)
+        return
+
+    # پردازش اطلاع‌رسانی توسط ادمین
+    elif state == "awaiting_notification_type" and user_id == ADMIN_ID:
+        await handle_notification_type(update, context, user_id, text)
+        return
+    
+    elif state == "awaiting_notification_target_user" and user_id == ADMIN_ID:
+        await handle_notification_target_user(update, context, user_id, text)
+        return
+    
+    elif state in ["awaiting_notification_text_all", "awaiting_notification_text_agents"] or state.startswith("awaiting_notification_text_single_"):
+        await handle_notification_text(update, context, user_id, state, text)
+        return
+    
+    elif state and state.startswith("confirm_notification_") and user_id == ADMIN_ID:
+        await handle_confirm_notification(update, context, user_id, state, text)
+        return
+
+    # هندلرهای ادمین برای user_info
+    elif state == "awaiting_admin_user_id_for_balance" and user_id == ADMIN_ID:
+        await handle_admin_balance_user(update, context, user_id, text)
+        return
+    
+    elif state and state.startswith("awaiting_balance_amount_") and user_id == ADMIN_ID:
+        await handle_admin_balance_amount(update, context, user_id, state, text)
+        return
+    
+    elif state == "awaiting_admin_user_id_for_agent" and user_id == ADMIN_ID:
+        await handle_admin_agent_user(update, context, user_id, text)
+        return
+    
+    elif state and state.startswith("awaiting_agent_type_") and user_id == ADMIN_ID:
+        await handle_admin_agent_type(update, context, user_id, state, text)
+        return
+
+    # اگر کاربر در هیچ وضعیت خاصی نباشد، دستورات معمولی را پردازش کن
+    await handle_normal_commands(update, context, user_id, text)
+
+async def process_payment_receipt(update, context, user_id, payment_id, receipt_type):
+    """پردازش فیش پرداخت"""
+    try:
+        payment = await db_execute("SELECT amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+        if not payment:
+            await update.message.reply_text("⚠️ پرداخت یافت نشد.", reply_markup=get_main_keyboard())
+            return
+            
+        amount, ptype, description = payment
+        caption = f"💳 فیش پرداختی از کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}):\n"
+        caption += f"مبلغ: {amount}\nنوع: {ptype if ptype != 'agency_request' else 'درخواست نمایندگی'}"
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ تایید", callback_data=f"approve_{payment_id}"),
+                InlineKeyboardButton("❌ رد", callback_data=f"reject_{payment_id}")
+            ]
+        ])
+
+        if update.message.photo:
+            file_id = update.message.photo[-1].file_id
+            await context.bot.send_photo(chat_id=ADMIN_ID, photo=file_id, caption=caption, reply_markup=keyboard)
+        elif update.message.document:
+            doc_id = update.message.document.file_id
+            await context.bot.send_document(chat_id=ADMIN_ID, document=doc_id, caption=caption, reply_markup=keyboard)
+        else:
+            await update.message.reply_text("⚠️ لطفا فیش پرداخت را به صورت عکس یا فایل ارسال کنید.", reply_markup=get_back_keyboard())
+            return
+
+        await update.message.reply_text("✅ فیش شما برای ادمین ارسال شد، لطفا منتظر تایید باشید.", reply_markup=get_main_keyboard())
+        
+    except Exception as e:
+        logging.error(f"Error processing payment receipt: {e}")
+        await update.message.reply_text("⚠️ خطا در پردازش فیش پرداخت.", reply_markup=get_main_keyboard())
+
+async def process_config(update, context, user_id, payment_id):
+    """پردازش کانفیگ توسط ادمین"""
+    try:
+        payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+        if not payment:
+            await update.message.reply_text("⚠️ پرداخت یافت نشد.", reply_markup=get_main_keyboard())
+            return
+            
+        buyer_id, description = payment
+        if update.message.text:
+            config = update.message.text
+            await update_subscription_config(payment_id, config)
+            await context.bot.send_message(
+                chat_id=buyer_id,
+                text=f"✅ کانفیگ اشتراک شما ({description})\nکد خرید: #{payment_id}\nدریافت شد:\n```\n{config}\n```",
+                parse_mode="Markdown"
+            )
+            await update.message.reply_text("✅ کانفیگ با موفقیت به خریدار ارسال شد.", reply_markup=None)
+        else:
+            await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.", reply_markup=get_back_keyboard())
+            
+    except Exception as e:
+        logging.error(f"Error processing config: {e}")
+        await update.message.reply_text("⚠️ خطا در پردازش کانفیگ.", reply_markup=get_main_keyboard())
+
+async def handle_coupon_recipient(update, context, user_id, state, text):
+    """پردازش انتخاب گیرنده کد تخفیف"""
+    parts = state.split("_")
+    coupon_code = parts[3]
+    discount_percent = int(parts[4])
+    
+    if text == "📢 برای همه":
+        try:
+            await create_coupon(coupon_code, discount_percent)
+            users = await db_execute("SELECT user_id FROM users WHERE is_agent = FALSE", fetch=True)
+            if not users:
+                await update.message.reply_text(
+                    "⚠️ هیچ کاربری (غیر از نمایندگان) یافت نشد.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+                return
+                
+            sent_count = 0
+            for user in users:
+                try:
                     await context.bot.send_message(
-                        chat_id=target_user_id,
+                        chat_id=user[0],
                         text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\n⏳ این کد فقط تا ۳ روز اعتبار دارد.\nفقط یک بار قابل استفاده است.",
                         parse_mode="Markdown"
                     )
-                    await update.message.reply_text(
-                        f"✅ کد تخفیف `{coupon_code}` برای کاربر با ID {target_user_id} ارسال شد.",
-                        reply_markup=get_main_keyboard(),
-                        parse_mode="Markdown"
-                    )
-                    user_states.pop(user_id, None)
-                else:
-                    await update.message.reply_text(
-                        f"⚠️ کاربری با ID {target_user_id} یافت نشد.",
-                        reply_markup=get_main_keyboard()
-                    )
-                    user_states.pop(user_id, None)
-                return
-            
-            elif text == "🎯 درصد خاصی از کاربران":
-                user_states[user_id] = f"awaiting_coupon_percent_{coupon_code}_{discount_percent}"
-                await update.message.reply_text("📊 درصد کاربران را وارد کنید (مثال: 20):", reply_markup=get_back_keyboard())
-                return
-            
-            else:
-                await update.message.reply_text("⚠️ لطفا یکی از گزینه‌های بالا را انتخاب کنید.", reply_markup=get_coupon_recipient_keyboard())
-                return
-        
-        elif state and state.startswith("awaiting_coupon_percent_") and user_id == ADMIN_ID:
-            parts = state.split("_")
-            coupon_code = parts[3]
-            discount_percent = int(parts[4])
-            if text.isdigit():
-                percent = int(text)
-                if 0 < percent <= 100:
-                    try:
-                        users = await db_execute("SELECT user_id FROM users WHERE is_agent = FALSE", fetch=True)
-                        if not users:
-                            await update.message.reply_text(
-                                "⚠️ هیچ کاربری (غیر از نمایندگان) یافت نشد.",
-                                reply_markup=get_main_keyboard()
-                            )
-                            user_states.pop(user_id, None)
-                            return
-                        total_users = len(users)
-                        num_users = max(1, round(total_users * (percent / 100)))
-                        selected_users = random.sample(users, min(num_users, total_users))
-                        await create_coupon(coupon_code, discount_percent)
-                        sent_count = 0
-                        for user in selected_users:
-                            try:
-                                await context.bot.send_message(
-                                    chat_id=user[0],
-                                    text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\n⏳ این کد فقط تا ۳ روز اعتبار دارد.\nفقط یک بار قابل استفاده است.",
-                                    parse_mode="Markdown"
-                                )
-                                sent_count += 1
-                            except Exception as e:
-                                logging.error(f"Error sending coupon to user_id {user[0]}: {e}")
-                                continue
-                        await update.message.reply_text(
-                            f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر ({percent}% از کاربران غیر نماینده) ارسال شد.",
-                            reply_markup=get_main_keyboard(),
-                            parse_mode="Markdown"
-                        )
-                        user_states.pop(user_id, None)
-                    except Exception as e:
-                        logging.error(f"Error sending coupons to {percent}% of users: {e}")
-                        await update.message.reply_text(
-                            "⚠️ خطا در ارسال کد تخفیف برای درصد مشخصی از کاربران.",
-                            reply_markup=get_main_keyboard()
-                        )
-                        user_states.pop(user_id, None)
-                else:
-                    await update.message.reply_text("⚠️ درصد باید بین 1 تا 100 باشد.", reply_markup=get_back_keyboard())
-            else:
-                await update.message.reply_text("⚠️ لطفا یک عدد معتبر وارد کنید.", reply_markup=get_back_keyboard())
-            return
-        
-        # پردازش کد تخفیف توسط کاربر عادی
-        elif state and state.startswith("awaiting_coupon_code_"):
-            parts = state.split("_")
-            amount = int(parts[3])
-            plan = "_".join(parts[4:]) if len(parts) <= 5 else "_".join(parts[4:-1])
-            
-            if text == "ادامه":
-                user_states[user_id] = f"awaiting_payment_method_{amount}_{plan}"
-                await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
-                return
-            
-            coupon_code = text.strip()
-            discount_percent, error = await validate_coupon(coupon_code, user_id)
-            if error:
-                await update.message.reply_text(
-                    f"⚠️ {error}\nلطفا کد معتبر وارد کنید یا برای ادامه روی 'ادامه' کلیک کنید:",
-                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
-                )
-                return
-            
-            discounted_amount = int(amount * (1 - discount_percent / 100))
-            user_states[user_id] = f"awaiting_payment_method_{discounted_amount}_{plan}_{coupon_code}"
-            await update.message.reply_text(
-                f"✅ کد تخفیف اعمال شد! مبلغ با {discount_percent}% تخفیف: {discounted_amount} تومان\nروش خرید را انتخاب کنید:",
-                reply_markup=get_payment_method_keyboard()
-            )
-            return
-        
-        # پردازش اطلاع‌رسانی توسط ادمین
-        elif state == "awaiting_notification_type" and user_id == ADMIN_ID:
-            if text == "📢 پیام به همه کاربران":
-                user_states[user_id] = "awaiting_notification_text_all"
-                await update.message.reply_text("📢 لطفا متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
-                return
-            elif text == "🧑‍💼 پیام به نمایندگان":
-                user_states[user_id] = "awaiting_notification_text_agents"
-                await update.message.reply_text("🧑‍💼 لطفا متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
-                return
-            elif text == "👤 پیام به یک نفر":
-                user_states[user_id] = "awaiting_notification_target_user"
-                await update.message.reply_text("🆔 ایدی عددی کاربر را وارد کنید:", reply_markup=get_back_keyboard())
-                return
-            elif text == "⬅️ بازگشت به منو":
-                await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
-                user_states.pop(user_id, None)
-                return
-        
-        elif state == "awaiting_notification_target_user" and user_id == ADMIN_ID:
-            try:
-                target_user_id = int(text)
-                user_exists = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
-                if not user_exists:
-                    await update.message.reply_text("⚠️ کاربر یافت نشد. لطفا ایدی معتبر وارد کنید:", reply_markup=get_back_keyboard())
-                    return
-                user_states[user_id] = f"awaiting_notification_text_single_{target_user_id}"
-                await update.message.reply_text("📢 لطفا متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
-                return
-            except ValueError:
-                await update.message.reply_text("⚠️ ایدی عددی نامعتبر است. لطفا دوباره تلاش کنید:", reply_markup=get_back_keyboard())
-                return
-        
-        elif state in ["awaiting_notification_text_all", "awaiting_notification_text_agents"] or state.startswith("awaiting_notification_text_single_"):
-            notification_text = text
-            
-            if state == "awaiting_notification_text_all":
-                notification_type = "all"
-                user_type = "همه کاربران"
-            elif state == "awaiting_notification_text_agents":
-                notification_type = "agents"
-                user_type = "نمایندگان"
-            elif state.startswith("awaiting_notification_text_single_"):
-                target_user_id = state.split("_")[-1]
-                notification_type = f"single_{target_user_id}"
-                user_type = f"کاربر {target_user_id}"
-            else:
-                notification_type = "unknown"
-                user_type = "کاربران"
-            
-            # ذخیره اطلاعات در context برای استفاده بعدی
-            context.user_data["notification_info"] = {
-                "text": notification_text,
-                "type": notification_type,
-                "user_type": user_type
-            }
-            
-            if state.startswith("awaiting_notification_text_single_"):
-                target_user_id = state.split("_")[-1]
-                context.user_data["notification_info"]["target_user_id"] = target_user_id
-            
-            await update.message.reply_text(
-                f"📢 آیا مطمئن هستید که می‌خواهید این اطلاعیه را برای {user_type} ارسال کنید؟",
-                reply_markup=ReplyKeyboardMarkup([
-                    [KeyboardButton("✅ بله، ارسال کن")],
-                    [KeyboardButton("❌ خیر، انصراف")]
-                ], resize_keyboard=True)
-            )
-            user_states[user_id] = f"confirm_notification_{notification_type}"
-            return
-        
-        elif state and state.startswith("confirm_notification_") and user_id == ADMIN_ID:
-            notification_type = state.replace("confirm_notification_", "")
-            
-            if text == "✅ بله، ارسال کن":
-                # دریافت اطلاعات از context
-                notification_info = context.user_data.get("notification_info", {})
-                notification_text = notification_info.get("text", "")
-                user_type = notification_info.get("user_type", "کاربران")
-                target_user_id = notification_info.get("target_user_id")
-                
-                if not notification_text:
-                    await update.message.reply_text("⚠️ متن اطلاعیه یافت نشد.", reply_markup=get_main_keyboard())
-                    user_states.pop(user_id, None)
-                    return
-                
-                await update.message.reply_text(f"🔄 در حال ارسال اطلاعیه به {user_type}...", reply_markup=None)
-                
-                try:
-                    # دریافت لیست کاربران بر اساس نوع
-                    if notification_type == "all":
-                        users = await db_execute("SELECT user_id FROM users", fetch=True)
-                    elif notification_type == "agents":
-                        users = await db_execute("SELECT user_id FROM users WHERE is_agent = TRUE", fetch=True)
-                    elif notification_type.startswith("single_"):
-                        if target_user_id:
-                            users = [[int(target_user_id)]]
-                        else:
-                            await update.message.reply_text("⚠️ ایدی کاربر یافت نشد.", reply_markup=get_main_keyboard())
-                            user_states.pop(user_id, None)
-                            return
-                    else:
-                        await update.message.reply_text("⚠️ نوع اطلاع‌رسانی نامعتبر است.", reply_markup=get_main_keyboard())
-                        user_states.pop(user_id, None)
-                        return
-                    
-                    if not users:
-                        await update.message.reply_text(
-                            f"⚠️ هیچ کاربری ({user_type}) یافت نشد.",
-                            reply_markup=get_main_keyboard()
-                        )
-                        user_states.pop(user_id, None)
-                        return
-                    
-                    # استفاده از تابع بهبود یافته برای ارسال موازی
-                    sent_count, failed_count, failed_users = await send_notification_to_users(
-                        context, users, notification_text
-                    )
-                    
-                    # ارسال گزارش
-                    report_message = f"✅ اطلاعیه با موفقیت به {sent_count} {user_type} ارسال شد.\n"
-                    if failed_count > 0:
-                        report_message += f"❌ تعداد {user_type} که دریافت نکردند: {failed_count}\n"
-                        if failed_users:
-                            failed_list = ", ".join(map(str, failed_users[:10]))  # نمایش 10 مورد اول
-                            if len(failed_users) > 10:
-                                failed_list += f" و {len(failed_users) - 10} کاربر دیگر"
-                            report_message += f"کاربران ناموفق: {failed_list}"
-                    
-                    await update.message.reply_text(report_message, reply_markup=get_main_keyboard())
-                    
+                    sent_count += 1
                 except Exception as e:
-                    logging.error(f"Error in notification process: {e}")
-                    await update.message.reply_text(
-                        f"⚠️ خطا در ارسال اطلاعیه: {str(e)}",
-                        reply_markup=get_main_keyboard()
-                    )
-                
-                # پاک کردن اطلاعات از context
-                if "notification_info" in context.user_data:
-                    del context.user_data["notification_info"]
+                    logging.error(f"Error sending coupon to user_id {user[0]}: {e}")
+                    continue
                     
-            else:
+            await update.message.reply_text(
+                f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر (غیر از نمایندگان) ارسال شد.",
+                reply_markup=get_main_keyboard(),
+                parse_mode="Markdown"
+            )
+            user_states.pop(user_id, None)
+            
+        except Exception as e:
+            logging.error(f"Error sending coupons to all users: {e}")
+            await update.message.reply_text(
+                "⚠️ خطا در ارسال کد تخفیف برای همه کاربران.",
+                reply_markup=get_main_keyboard()
+            )
+            user_states.pop(user_id, None)
+        return
+        
+    elif text == "👤 برای یک نفر":
+        target_user_id = 6056483071
+        user = await db_execute(
+            "SELECT user_id, is_agent FROM users WHERE user_id = %s",
+            (target_user_id,), fetchone=True
+        )
+        if user:
+            _, is_agent = user
+            if is_agent:
                 await update.message.reply_text(
-                    "❌ ارسال اطلاعیه لغو شد.",
+                    "⚠️ این کاربر نماینده است و نمی‌تواند کد تخفیف دریافت کند.",
                     reply_markup=get_main_keyboard()
                 )
-            
-            user_states.pop(user_id, None)
-            return
-        
-        # هندلرهای ادمین برای user_info
-        elif state == "awaiting_admin_user_id_for_balance" and user_id == ADMIN_ID:
-            try:
-                target_user_id = int(text)
-                user_exists = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
-                if not user_exists:
-                    await update.message.reply_text("⚠️ کاربر یافت نشد.", reply_markup=get_back_keyboard())
-                    return
-                user_states[user_id] = f"awaiting_balance_amount_{target_user_id}"
-                await update.message.reply_text("💰 مبلغ را وارد کنید (مثبت برای افزایش، منفی برای کاهش):", reply_markup=get_back_keyboard())
-            except ValueError:
-                await update.message.reply_text("⚠️ ایدی عددی نامعتبر است.", reply_markup=get_back_keyboard())
-            return
-        
-        elif state and state.startswith("awaiting_balance_amount_") and user_id == ADMIN_ID:
-            try:
-                parts = state.split("_")
-                target_user_id = int(parts[3])
-                amount = int(text)
-                current_balance = await get_balance(target_user_id)
-                if amount > 0:
-                    await add_balance(target_user_id, amount)
-                    await update.message.reply_text(f"✅ {amount:,} تومان به موجودی کاربر {target_user_id} اضافه شد. موجودی جدید: {current_balance + amount:,} تومان")
-                else:
-                    deduct_amount = abs(amount)
-                    if current_balance >= deduct_amount:
-                        await deduct_balance(target_user_id, deduct_amount)
-                        await update.message.reply_text(f"✅ {deduct_amount:,} تومان از موجودی کاربر {target_user_id} کسر شد. موجودی جدید: {current_balance - deduct_amount:,} تومان")
-                    else:
-                        await update.message.reply_text(f"⚠️ موجودی کاربر {target_user_id} ({current_balance:,} تومان) کافی نیست.")
                 user_states.pop(user_id, None)
-            except ValueError:
-                await update.message.reply_text("⚠️ مبلغ نامعتبر است.", reply_markup=get_back_keyboard())
-            except Exception as e:
-                logging.error(f"Error in balance update: {e}")
-                await update.message.reply_text("⚠️ خطا در به‌روزرسانی موجودی.")
-            return
-        
-        elif state == "awaiting_admin_user_id_for_agent" and user_id == ADMIN_ID:
-            try:
-                target_user_id = int(text)
-                user_exists = await db_execute("SELECT user_id, is_agent FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
-                if not user_exists:
-                    await update.message.reply_text("⚠️ کاربر یافت نشد.", reply_markup=get_back_keyboard())
-                    return
-                current_status, _ = user_exists
-                status_text = "نماینده" if current_status else "ساده"
-                user_states[user_id] = f"awaiting_agent_type_{target_user_id}"
-                await update.message.reply_text(
-                    f"🆔 کاربر {target_user_id} در حال حاضر {status_text} است.\n"
-                    "نوع جدید اکانت را انتخاب کنید:",
-                    reply_markup=ReplyKeyboardMarkup([
-                        [KeyboardButton("ساده")],
-                        [KeyboardButton("نماینده")],
-                        [KeyboardButton("انصراف")]
-                    ], resize_keyboard=True)
-                )
-            except ValueError:
-                await update.message.reply_text("⚠️ ایدی عددی نامعتبر است.", reply_markup=get_back_keyboard())
-            return
-        
-        elif state and state.startswith("awaiting_agent_type_") and user_id == ADMIN_ID:
-            parts = state.split("_")
-            target_user_id = int(parts[3])
-            if text == "ساده":
-                await unset_user_agent(target_user_id)
-                await update.message.reply_text(f"✅ نوع اکانت کاربر {target_user_id} به 'ساده' تغییر یافت.", reply_markup=get_back_keyboard())
-            elif text == "نماینده":
-                await set_user_agent(target_user_id)
-                await update.message.reply_text(f"✅ نوع اکانت کاربر {target_user_id} به 'نماینده' تغییر یافت.", reply_markup=get_back_keyboard())
-            elif text == "انصراف":
-                await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=get_back_keyboard())
-            else:
-                await update.message.reply_text("⚠️ گزینه نامعتبر.", reply_markup=ReplyKeyboardMarkup([
-                    [KeyboardButton("ساده")],
-                    [KeyboardButton("نماینده")],
-                    [KeyboardButton("انصراف")]
-                ], resize_keyboard=True))
                 return
+                
+            await create_coupon(coupon_code, discount_percent, target_user_id)
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\n⏳ این کد فقط تا ۳ روز اعتبار دارد.\nفقط یک بار قابل استفاده است.",
+                parse_mode="Markdown"
+            )
+            await update.message.reply_text(
+                f"✅ کد تخفیف `{coupon_code}` برای کاربر با ID {target_user_id} ارسال شد.",
+                reply_markup=get_main_keyboard(),
+                parse_mode="Markdown"
+            )
+            user_states.pop(user_id, None)
+        else:
+            await update.message.reply_text(
+                f"⚠️ کاربری با ID {target_user_id} یافت نشد.",
+                reply_markup=get_main_keyboard()
+            )
+            user_states.pop(user_id, None)
+        return
+        
+    elif text == "🎯 درصد خاصی از کاربران":
+        user_states[user_id] = f"awaiting_coupon_percent_{coupon_code}_{discount_percent}"
+        await update.message.reply_text("📊 درصد کاربران را وارد کنید (مثال: 20):", reply_markup=get_back_keyboard())
+        return
+        
+    else:
+        await update.message.reply_text("⚠️ لطفا یکی از گزینه‌های بالا را انتخاب کنید.", reply_markup=get_coupon_recipient_keyboard())
+        return
+
+async def handle_coupon_percent(update, context, user_id, state, text):
+    """پردازش درصد کاربران برای کد تخفیف"""
+    parts = state.split("_")
+    coupon_code = parts[3]
+    discount_percent = int(parts[4])
+    
+    if text.isdigit():
+        percent = int(text)
+        if 1 <= percent <= 100:
+            try:
+                users = await db_execute("SELECT user_id FROM users WHERE is_agent = FALSE", fetch=True)
+                if not users:
+                    await update.message.reply_text(
+                        "⚠️ هیچ کاربری (غیر از نمایندگان) یافت نشد.",
+                        reply_markup=get_main_keyboard()
+                    )
+                    user_states.pop(user_id, None)
+                    return
+                    
+                total_users = len(users)
+                num_users = max(1, round(total_users * (percent / 100)))
+                selected_users = random.sample(users, min(num_users, total_users))
+                await create_coupon(coupon_code, discount_percent)
+                sent_count = 0
+                
+                for user in selected_users:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=user[0],
+                            text=f"🎉 کد تخفیف `{coupon_code}` با {discount_percent}% تخفیف برای شما!\n⏳ این کد فقط تا ۳ روز اعتبار دارد.\nفقط یک بار قابل استفاده است.",
+                            parse_mode="Markdown"
+                        )
+                        sent_count += 1
+                    except Exception as e:
+                        logging.error(f"Error sending coupon to user_id {user[0]}: {e}")
+                        continue
+                        
+                await update.message.reply_text(
+                    f"✅ کد تخفیف `{coupon_code}` برای {sent_count} کاربر ({percent}% از کاربران غیر نماینده) ارسال شد.",
+                    reply_markup=get_main_keyboard(),
+                    parse_mode="Markdown"
+                )
+                user_states.pop(user_id, None)
+                
+            except Exception as e:
+                logging.error(f"Error sending coupons to {percent}% of users: {e}")
+                await update.message.reply_text(
+                    "⚠️ خطا در ارسال کد تخفیف برای درصد مشخصی از کاربران.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+        else:
+            await update.message.reply_text("⚠️ درصد باید بین 1 تا 100 باشد.", reply_markup=get_back_keyboard())
+    else:
+        await update.message.reply_text("⚠️ لطفا یک عدد معتبر وارد کنید.", reply_markup=get_back_keyboard())
+
+async def handle_coupon_code(update, context, user_id, state, text):
+    """پردازش کد تخفیف توسط کاربر"""
+    parts = state.split("_")
+    amount = int(parts[3])
+    plan = "_".join(parts[4:]) if len(parts) <= 5 else "_".join(parts[4:-1])
+    
+    if text == "ادامه":
+        user_states[user_id] = f"awaiting_payment_method_{amount}_{plan}"
+        await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
+        return
+        
+    coupon_code = text.strip()
+    discount_percent, error = await validate_coupon(coupon_code, user_id)
+    if error:
+        await update.message.reply_text(
+            f"⚠️ {error}\nلطفا کد معتبر وارد کنید یا برای ادامه روی 'ادامه' کلیک کنید:",
+            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
+        )
+        return
+        
+    discounted_amount = int(amount * (1 - discount_percent / 100))
+    user_states[user_id] = f"awaiting_payment_method_{discounted_amount}_{plan}_{coupon_code}"
+    await update.message.reply_text(
+        f"✅ کد تخفیف اعمال شد! مبلغ با {discount_percent}% تخفیف: {discounted_amount} تومان\nروش خرید را انتخاب کنید:",
+        reply_markup=get_payment_method_keyboard()
+    )
+
+async def handle_notification_type(update, context, user_id, text):
+    """پردازش نوع اطلاع‌رسانی"""
+    if text == "📢 پیام به همه کاربران":
+        user_states[user_id] = "awaiting_notification_text_all"
+        await update.message.reply_text("📢 لطفا متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
+    elif text == "🧑‍💼 پیام به نمایندگان":
+        user_states[user_id] = "awaiting_notification_text_agents"
+        await update.message.reply_text("🧑‍💼 لطفا متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
+    elif text == "👤 پیام به یک نفر":
+        user_states[user_id] = "awaiting_notification_target_user"
+        await update.message.reply_text("🆔 ایدی عددی کاربر را وارد کنید:", reply_markup=get_back_keyboard())
+    elif text == "⬅️ بازگشت به منو":
+        await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
+        user_states.pop(user_id, None)
+
+async def handle_notification_target_user(update, context, user_id, text):
+    """پردازش ایدی کاربر برای اطلاع‌رسانی"""
+    try:
+        target_user_id = int(text)
+        user_exists = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
+        if not user_exists:
+            await update.message.reply_text("⚠️ کاربر یافت نشد. لطفا ایدی معتبر وارد کنید:", reply_markup=get_back_keyboard())
+            return
+            
+        user_states[user_id] = f"awaiting_notification_text_single_{target_user_id}"
+        await update.message.reply_text("📢 لطفا متن اطلاع‌رسانی را ارسال کنید:", reply_markup=get_back_keyboard())
+        
+    except ValueError:
+        await update.message.reply_text("⚠️ ایدی عددی نامعتبر است. لطفا دوباره تلاش کنید:", reply_markup=get_back_keyboard())
+
+async def handle_notification_text(update, context, user_id, state, text):
+    """پردازش متن اطلاع‌رسانی"""
+    notification_text = text
+    
+    if state == "awaiting_notification_text_all":
+        notification_type = "all"
+        user_type = "همه کاربران"
+    elif state == "awaiting_notification_text_agents":
+        notification_type = "agents"
+        user_type = "نمایندگان"
+    elif state.startswith("awaiting_notification_text_single_"):
+        target_user_id = state.split("_")[-1]
+        notification_type = f"single_{target_user_id}"
+        user_type = f"کاربر {target_user_id}"
+    else:
+        notification_type = "unknown"
+        user_type = "کاربران"
+    
+    context.user_data["notification_info"] = {
+        "text": notification_text,
+        "type": notification_type,
+        "user_type": user_type
+    }
+    
+    if state.startswith("awaiting_notification_text_single_"):
+        context.user_data["notification_info"]["target_user_id"] = target_user_id
+    
+    await update.message.reply_text(
+        f"📢 آیا مطمئن هستید که می‌خواهید این اطلاعیه را برای {user_type} ارسال کنید؟",
+        reply_markup=ReplyKeyboardMarkup([
+            [KeyboardButton("✅ بله، ارسال کن")],
+            [KeyboardButton("❌ خیر، انصراف")]
+        ], resize_keyboard=True)
+    )
+    user_states[user_id] = f"confirm_notification_{notification_type}"
+
+async def handle_confirm_notification(update, context, user_id, state, text):
+    """پردازش تایید نهایی اطلاع‌رسانی"""
+    notification_type = state.replace("confirm_notification_", "")
+    
+    if text == "✅ بله، ارسال کن":
+        notification_info = context.user_data.get("notification_info", {})
+        notification_text = notification_info.get("text", "")
+        user_type = notification_info.get("user_type", "کاربران")
+        target_user_id = notification_info.get("target_user_id")
+        
+        if not notification_text:
+            await update.message.reply_text("⚠️ متن اطلاعیه یافت نشد.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
             return
+            
+        await update.message.reply_text(f"🔄 در حال ارسال اطلاعیه به {user_type}...", reply_markup=None)
+        
+        try:
+            if notification_type == "all":
+                users = await db_execute("SELECT user_id FROM users", fetch=True)
+            elif notification_type == "agents":
+                users = await db_execute("SELECT user_id FROM users WHERE is_agent = TRUE", fetch=True)
+            elif notification_type.startswith("single_"):
+                if target_user_id:
+                    users = [[int(target_user_id)]]
+                else:
+                    await update.message.reply_text("⚠️ ایدی کاربر یافت نشد.", reply_markup=get_main_keyboard())
+                    user_states.pop(user_id, None)
+                    return
+            else:
+                await update.message.reply_text("⚠️ نوع اطلاع‌رسانی نامعتبر است.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+                return
+                
+            if not users:
+                await update.message.reply_text(
+                    f"⚠️ هیچ کاربری ({user_type}) یافت نشد.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+                return
+                
+            sent_count, failed_count, failed_users = await send_notification_to_users(
+                context, users, notification_text
+            )
+            
+            report_message = f"✅ اطلاعیه با موفقیت به {sent_count} {user_type} ارسال شد.\n"
+            if failed_count > 0:
+                report_message += f"❌ تعداد {user_type} که دریافت نکردند: {failed_count}\n"
+                if failed_users:
+                    failed_list = ", ".join(map(str, failed_users[:10]))
+                    if len(failed_users) > 10:
+                        failed_list += f" و {len(failed_users) - 10} کاربر دیگر"
+                    report_message += f"کاربران ناموفق: {failed_list}"
+                    
+            await update.message.reply_text(report_message, reply_markup=get_main_keyboard())
+            
+        except Exception as e:
+            logging.error(f"Error in notification process: {e}")
+            await update.message.reply_text(
+                f"⚠️ خطا در ارسال اطلاعیه: {str(e)}",
+                reply_markup=get_main_keyboard()
+            )
+            
+        if "notification_info" in context.user_data:
+            del context.user_data["notification_info"]
+            
+    else:
+        await update.message.reply_text(
+            "❌ ارسال اطلاعیه لغو شد.",
+            reply_markup=get_main_keyboard()
+        )
+        
+    user_states.pop(user_id, None)
 
-    # ---------- پردازش دستورات اصلی ----------
-    # پاک کردن وضعیت کاربر وقتی از منوی اصلی استفاده می‌کند
-    if text in ["💰 موجودی", "💳 خرید اشتراک", "🎁 اشتراک تست رایگان", "☎️ پشتیبانی", 
-                "💵 اعتبار رایگان", "📂 اشتراک‌های من", "💡 راهنمای اتصال", "🧑‍💼 درخواست نمایندگی"]:
+async def handle_admin_balance_user(update, context, user_id, text):
+    """پردازش ایدی کاربر برای تغییر موجودی"""
+    try:
+        target_user_id = int(text)
+        user_exists = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
+        if not user_exists:
+            await update.message.reply_text("⚠️ کاربر یافت نشد.", reply_markup=get_back_keyboard())
+            return
+            
+        user_states[user_id] = f"awaiting_balance_amount_{target_user_id}"
+        await update.message.reply_text("💰 مبلغ را وارد کنید (مثبت برای افزایش، منفی برای کاهش):", reply_markup=get_back_keyboard())
+        
+    except ValueError:
+        await update.message.reply_text("⚠️ ایدی عددی نامعتبر است.", reply_markup=get_back_keyboard())
+
+async def handle_admin_balance_amount(update, context, user_id, state, text):
+    """پردازش مبلغ برای تغییر موجودی"""
+    try:
+        parts = state.split("_")
+        target_user_id = int(parts[3])
+        amount = int(text)
+        current_balance = await get_balance(target_user_id)
+        
+        if amount > 0:
+            await add_balance(target_user_id, amount)
+            await update.message.reply_text(f"✅ {amount:,} تومان به موجودی کاربر {target_user_id} اضافه شد. موجودی جدید: {current_balance + amount:,} تومان", reply_markup=get_main_keyboard())
+        else:
+            deduct_amount = abs(amount)
+            if current_balance >= deduct_amount:
+                await deduct_balance(target_user_id, deduct_amount)
+                await update.message.reply_text(f"✅ {deduct_amount:,} تومان از موجودی کاربر {target_user_id} کسر شد. موجودی جدید: {current_balance - deduct_amount:,} تومان", reply_markup=get_main_keyboard())
+            else:
+                await update.message.reply_text(f"⚠️ موجودی کاربر {target_user_id} ({current_balance:,} تومان) کافی نیست.", reply_markup=get_main_keyboard())
+                
+        user_states.pop(user_id, None)
+        
+    except ValueError:
+        await update.message.reply_text("⚠️ مبلغ نامعتبر است.", reply_markup=get_back_keyboard())
+    except Exception as e:
+        logging.error(f"Error in balance update: {e}")
+        await update.message.reply_text("⚠️ خطا در به‌روزرسانی موجودی.", reply_markup=get_main_keyboard())
+
+async def handle_admin_agent_user(update, context, user_id, text):
+    """پردازش ایدی کاربر برای تغییر نوع اکانت"""
+    try:
+        target_user_id = int(text)
+        user_exists = await db_execute("SELECT user_id, is_agent FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
+        if not user_exists:
+            await update.message.reply_text("⚠️ کاربر یافت نشد.", reply_markup=get_back_keyboard())
+            return
+            
+        current_status, _ = user_exists
+        status_text = "نماینده" if current_status else "ساده"
+        user_states[user_id] = f"awaiting_agent_type_{target_user_id}"
+        
+        await update.message.reply_text(
+            f"🆔 کاربر {target_user_id} در حال حاضر {status_text} است.\n"
+            "نوع جدید اکانت را انتخاب کنید:",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("ساده")],
+                [KeyboardButton("نماینده")],
+                [KeyboardButton("انصراف")]
+            ], resize_keyboard=True)
+        )
+        
+    except ValueError:
+        await update.message.reply_text("⚠️ ایدی عددی نامعتبر است.", reply_markup=get_back_keyboard())
+
+async def handle_admin_agent_type(update, context, user_id, state, text):
+    """پردازش نوع جدید اکانت"""
+    parts = state.split("_")
+    target_user_id = int(parts[3])
+    
+    if text == "ساده":
+        await unset_user_agent(target_user_id)
+        await update.message.reply_text(f"✅ نوع اکانت کاربر {target_user_id} به 'ساده' تغییر یافت.", reply_markup=get_main_keyboard())
+    elif text == "نماینده":
+        await set_user_agent(target_user_id)
+        await update.message.reply_text(f"✅ نوع اکانت کاربر {target_user_id} به 'نماینده' تغییر یافت.", reply_markup=get_main_keyboard())
+    elif text == "انصراف":
+        await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=get_main_keyboard())
+    else:
+        await update.message.reply_text("⚠️ گزینه نامعتبر.", reply_markup=ReplyKeyboardMarkup([
+            [KeyboardButton("ساده")],
+            [KeyboardButton("نماینده")],
+            [KeyboardButton("انصراف")]
+        ], resize_keyboard=True))
+        return
+        
+    user_states.pop(user_id, None)
+
+async def handle_normal_commands(update, context, user_id, text):
+    """پردازش دستورات عادی ربات"""
+    
+    # پاک کردن وضعیت قبلی کاربر وقتی از منوی اصلی استفاده می‌کند
+    if text in [
+        "💰 موجودی", "💳 خرید اشتراک", "🎁 اشتراک تست رایگان", "☎️ پشتیبانی",
+        "💵 اعتبار رایگان", "📂 اشتراک‌های من", "💡 راهنمای اتصال", "🧑‍💼 درخواست نمایندگی"
+    ]:
         user_states.pop(user_id, None)
     
     if text == "💰 موجودی":
@@ -1577,17 +1667,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🥇۶ ماهه | ۳۸۰,۰۰۰ تومان | نامحدود | ۲ کاربره"
     ]:
         mapping = {
-            "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود | ۲ کاربره": (90000, 0),
-            "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود | ۲ کاربره": (250000, 1),
-            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود | ۲ کاربره": (450000, 2),
-            "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود | ۲ کاربره": (70000, 0),
-            "🥈۳ ماهه | ۲۱۰,۰۰۰ تومان | نامحدود | ۲ کاربره": (210000, 1),
-            "🥇۶ ماهه | ۳۸۰,۰۰۰ تومان | نامحدود | ۲ کاربره": (380000, 2)
+            "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود | ۲ کاربره": 90000,
+            "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود | ۲ کاربره": 250000,
+            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود | ۲ کاربره": 450000,
+            "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود | ۲ کاربره": 70000,
+            "🥈۳ ماهه | ۲۱۰,۰۰۰ تومان | نامحدود | ۲ کاربره": 210000,
+            "🥇۶ ماهه | ۳۸۰,۰۰۰ تومان | نامحدود | ۲ کاربره": 380000
         }
-        amount, plan_index = mapping.get(text, (0, -1))
-        if plan_index == -1:
+        amount = mapping.get(text, 0)
+        if amount == 0:
             await update.message.reply_text("⚠️ خطا در انتخاب پلن. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
+            return
+            
         is_agent = await is_user_agent(user_id)
         if not is_agent:
             await update.message.reply_text(
@@ -1601,90 +1693,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_states.get(user_id, "").startswith("awaiting_payment_method_"):
-        state = user_states.get(user_id)
-        logging.info(f"Processing payment method for user_id {user_id}, state: {state}")
-        try:
-            parts = state.split("_")
-            amount = int(parts[3])
-            plan = "_".join(parts[4:]) if len(parts) <= 5 else "_".join(parts[4:-1])
-            coupon_code = parts[-1] if len(parts) > 5 else None
-            
-            if text == "🏦 کارت به کارت":
-                payment_id = await add_payment(user_id, amount, "buy_subscription", "card_to_card", description=plan, coupon_code=coupon_code)
-                if payment_id:
-                    await add_subscription(user_id, payment_id, plan)
-                    await update.message.reply_text(
-                        f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                        f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
-                        reply_markup=get_back_keyboard(),
-                        parse_mode="MarkdownV2"
-                    )
-                    user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
-                    logging.info(f"Set state to awaiting_subscription_receipt_{payment_id} for user_id {user_id}")
-                else:
-                    await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-                    user_states.pop(user_id, None)
-                return
-
-            if text == "💎 پرداخت با ترون":
-                payment_id = await add_payment(user_id, amount, "buy_subscription", "tron", description=plan, coupon_code=coupon_code)
-                if payment_id:
-                    await add_subscription(user_id, payment_id, plan)
-                    await update.message.reply_text(
-                        f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
-                        f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
-                        reply_markup=get_back_keyboard(),
-                        parse_mode="MarkdownV2"
-                    )
-                    user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
-                    logging.info(f"Set state to awaiting_subscription_receipt_{payment_id} for user_id {user_id}")
-                else:
-                    await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-                    user_states.pop(user_id, None)
-                return
-
-            if text == "💰 پرداخت با موجودی":
-                balance = await get_balance(user_id)
-                if balance >= amount:
-                    payment_id = await add_payment(user_id, amount, "buy_subscription", "balance", description=plan, coupon_code=coupon_code)
-                    if payment_id:
-                        await add_subscription(user_id, payment_id, plan)
-                        await deduct_balance(user_id, amount)
-                        await update_payment_status(payment_id, "approved")
-                        await update.message.reply_text(
-                            "✅ خرید شما با موفقیت انجام شد. حداکثر تا ۱ ساعت دیگر کانفیگ برای شما ارسال خواهد شد.",
-                            reply_markup=get_main_keyboard()
-                        )
-                        await context.bot.send_message(
-                            chat_id=ADMIN_ID,
-                            text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود سرویس {plan} خریداری کرد."
-                        )
-                        config_keyboard = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
-                        ])
-                        await context.bot.send_message(
-                            chat_id=ADMIN_ID,
-                            text=f"✅ پرداخت برای اشتراک ({plan}) تایید شد.",
-                            reply_markup=config_keyboard
-                        )
-                        user_states.pop(user_id, None)
-                        logging.info(f"Payment with balance successful for user_id {user_id}, payment_id: {payment_id}")
-                    else:
-                        await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-                        user_states.pop(user_id, None)
-                else:
-                    await update.message.reply_text(
-                        f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
-                        reply_markup=get_main_keyboard()
-                    )
-                    user_states.pop(user_id, None)
-                return
-
-        except Exception as e:
-            logging.error(f"Error processing payment method for user_id {user_id}, state: {state}, error: {e}")
-            await update.message.reply_text("⚠️ خطا در پردازش. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-            user_states.pop(user_id, None)
-            return
+        await handle_payment_method(update, context, user_id, text)
+        return
 
     if text == "🎁 اشتراک تست رایگان":
         await update.message.reply_text(
@@ -1718,43 +1728,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "📂 اشتراک‌های من":
-        try:
-            subscriptions = await get_user_subscriptions(user_id)
-            if not subscriptions:
-                await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
-                return
-            
-            current_time = datetime.now()
-            response = "📂 لیست کامل اشتراک‌های شما:\n\n"
-            
-            for sub in subscriptions:
-                try:
-                    response += f"🔹 اشتراک #{sub['id']}\n"
-                    response += f"📌 پلن: {sub['plan']}\n"
-                    response += f"🆔 کد خرید: #{sub['payment_id']}\n"
-                    response += f"📊 وضعیت: {'✅ فعال' if sub['status'] == 'active' else '⏳ در انتظار'}\n"
-                    
-                    if sub['status'] == "active":
-                        remaining_days = max(0, (sub['end_date'] - current_time).days)
-                        response += f"⏳ زمان باقی‌مانده: {remaining_days} روز\n"
-                        response += f"📅 تاریخ شروع: {sub['start_date'].strftime('%Y-%m-%d %H:%M')}\n"
-                        response += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
-                    
-                    if sub['config']:
-                        response += f"🔐 کانفیگ:\n```\n{sub['config']}\n```\n"
-                    
-                    response += "------------------------\n\n"
-                    
-                except Exception as e:
-                    logging.error(f"Error processing subscription {sub['id']} for user_id {user_id}: {e}")
-                    continue
-            
-            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="Markdown")
-            
-        except Exception as e:
-            logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
-            await update.message.reply_text("⚠️ خطا در نمایش اشتراک‌ها. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
-        
+        await show_user_subscriptions(update, context, user_id)
         return
 
     if text == "💡 راهنمای اتصال":
@@ -1764,92 +1738,67 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if text == "📗 اندروید":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های V2RayNG یا Hiddify(پیشنهادی) است ✅\n"
-            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        return
-
-    if text == "📕 آیفون/مک":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های Singbox(پیشنهادی) یا Streisand یا V2box(پیشنهادی) هست ✅\n"
-            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        return
-
-    if text == "📘 ویندوز":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\n"
-            "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
-        return
-
-    if text == "📙 لینوکس":
-        await update.message.reply_text(
-            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\n"
-            "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
-            reply_markup=get_connection_guide_keyboard()
-        )
+    if text in ["📗 اندروید", "📕 آیفون/مک", "📘 ویندوز", "📙 لینوکس"]:
+        guide_texts = {
+            "📗 اندروید": "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های V2RayNG یا Hiddify(پیشنهادی) است ✅\nبا این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            "📕 آیفون/مک": "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های Singbox(پیشنهادی) یا Streisand یا V2box(پیشنهادی) هست ✅\nبا این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            "📘 ویندوز": "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\nبا این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            "📙 لینوکس": "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\nبا این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀"
+        }
+        await update.message.reply_text(guide_texts[text], reply_markup=get_connection_guide_keyboard())
         return
 
     if text == "🧑‍💼 درخواست نمایندگی":
-        is_agent = await is_user_agent(user_id)
-        if is_agent:
-            await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent=True))
-            return
-
-        agency_text = (
-            "🚀 اعطای نمایندگی رسمی تیز وی پی ان 🚀\n\n"
-            "اگر به دنبال یک فرصت درآمدزایی پایدار و بدون محدودیت هستید، حالا بهترین زمان برای پیوستن به تیم ماست!\n"
-            "ما به تعداد محدودی نماینده رسمی می‌پذیریم که بتوانند با فروش سرویس‌های پرسرعت و پایدار تیز وی پی ان، کسب‌وکار خودشان را راه‌اندازی کنند.\n\n"
-            "💰 شرایط دریافت نمایندگی:\n"
-            "برای شروع همکاری و فعال‌سازی پنل اختصاصی، کافیست ۱ میلیون تومان واریز کنید.\n"
-            "پس از واریز، شما به یک پنل کامل و شخصی دسترسی خواهید داشت که امکان ساخت و مدیریت اکانت‌ها را برایتان فراهم می‌کند.\n\n"
-            "📦 قیمت پلن‌ها برای نمایندگان:\n"
-            "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود | ۲ کاربره (٪۲۲ کاهش)\n"
-            "🥈۳ ماهه | ۲۱۰,۰۰۰ تومان | نامحدود | ۲ کاربره (٪۱۶ کاهش)\n"
-            "🥇۶ ماهه | ۳۸۰,۰۰۰ تومان | نامحدود | ۲ کاربره (٪۱۶ کاهش)\n\n"
-            "🔹 اکانت‌ها کاملاً نامحدود هستند (بدون محدودیت حجم یا سرعت)\n"
-            "🔹 شما تعیین‌کننده قیمت فروش به مشتری هستید\n"
-            "🔹 پشتیبانی کامل و ۲۴ ساعته\n\n"
-            "🔻 در صورت تایید موارد بالا روش پرداخت خود را انتخاب کنید"
-        )
-        await update.message.reply_text(agency_text, reply_markup=get_payment_method_keyboard())
-        user_states[user_id] = "awaiting_agency_payment_method"
+        await handle_agency_request(update, context, user_id)
         return
 
     if user_states.get(user_id) == "awaiting_agency_payment_method":
-        amount = 1000000
-        description = "درخواست نمایندگی"
+        await handle_agency_payment(update, context, user_id, text)
+        return
+
+    await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
+    user_states.pop(user_id, None)
+
+async def handle_payment_method(update, context, user_id, text):
+    """پردازش روش پرداخت"""
+    state = user_states.get(user_id)
+    logging.info(f"Processing payment method for user_id {user_id}, state: {state}")
+    
+    try:
+        parts = state.split("_")
+        amount = int(parts[3])
+        plan = "_".join(parts[4:]) if len(parts) <= 5 else "_".join(parts[4:-1])
+        coupon_code = parts[-1] if len(parts) > 5 else None
+        
         if text == "🏦 کارت به کارت":
-            payment_id = await add_payment(user_id, amount, "agency_request", "card_to_card", description=description)
+            payment_id = await add_payment(user_id, amount, "buy_subscription", "card_to_card", description=plan, coupon_code=coupon_code)
             if payment_id:
+                await add_subscription(user_id, payment_id, plan)
                 await update.message.reply_text(
                     f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
                     f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
                     reply_markup=get_back_keyboard(),
                     parse_mode="MarkdownV2"
                 )
-                user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
+                user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+                logging.info(f"Set state to awaiting_subscription_receipt_{payment_id} for user_id {user_id}")
             else:
                 await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
                 user_states.pop(user_id, None)
             return
 
         if text == "💎 پرداخت با ترون":
-            payment_id = await add_payment(user_id, amount, "agency_request", "tron", description=description)
+            payment_id = await add_payment(user_id, amount, "buy_subscription", "tron", description=plan, coupon_code=coupon_code)
             if payment_id:
+                await add_subscription(user_id, payment_id, plan)
                 await update.message.reply_text(
                     f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
                     f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
                     reply_markup=get_back_keyboard(),
                     parse_mode="MarkdownV2"
                 )
-                user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
+                user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+                logging.info(f"Set state to awaiting_subscription_receipt_{payment_id} for user_id {user_id}")
             else:
                 await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
                 user_states.pop(user_id, None)
@@ -1858,21 +1807,29 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text == "💰 پرداخت با موجودی":
             balance = await get_balance(user_id)
             if balance >= amount:
-                payment_id = await add_payment(user_id, amount, "agency_request", "balance", description=description)
+                payment_id = await add_payment(user_id, amount, "buy_subscription", "balance", description=plan, coupon_code=coupon_code)
                 if payment_id:
+                    await add_subscription(user_id, payment_id, plan)
                     await deduct_balance(user_id, amount)
                     await update_payment_status(payment_id, "approved")
-                    await set_user_agent(user_id)
-                    await add_balance(user_id, amount)  # Add the 1M to balance
                     await update.message.reply_text(
-                        "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.",
+                        "✅ خرید شما با موفقیت انجام شد. حداکثر تا ۱ ساعت دیگر کانفیگ برای شما ارسال خواهد شد.",
                         reply_markup=get_main_keyboard()
                     )
                     await context.bot.send_message(
                         chat_id=ADMIN_ID,
-                        text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود نمایندگی خریداری کرد."
+                        text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود سرویس {plan} خریداری کرد."
+                    )
+                    config_keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
+                    ])
+                    await context.bot.send_message(
+                        chat_id=ADMIN_ID,
+                        text=f"✅ پرداخت برای اشتراک ({plan}) تایید شد.",
+                        reply_markup=config_keyboard
                     )
                     user_states.pop(user_id, None)
+                    logging.info(f"Payment with balance successful for user_id {user_id}, payment_id: {payment_id}")
                 else:
                     await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
                     user_states.pop(user_id, None)
@@ -1884,75 +1841,205 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_states.pop(user_id, None)
             return
 
-    await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
-    user_states.pop(user_id, None)
+    except Exception as e:
+        logging.error(f"Error processing payment method for user_id {user_id}, state: {state}, error: {e}")
+        await update.message.reply_text("⚠️ خطا در پردازش. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+        user_states.pop(user_id, None)
+        return
+
+async def show_user_subscriptions(update, context, user_id):
+    """نمایش اشتراک‌های کاربر"""
+    try:
+        subscriptions = await get_user_subscriptions(user_id)
+        if not subscriptions:
+            await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
+            return
+        
+        current_time = datetime.now()
+        response = "📂 لیست کامل اشتراک‌های شما:\n\n"
+        
+        for sub in subscriptions:
+            try:
+                response += f"🔹 اشتراک #{sub['id']}\n"
+                response += f"📌 پلن: {sub['plan']}\n"
+                response += f"🆔 کد خرید: #{sub['payment_id']}\n"
+                response += f"📊 وضعیت: {'✅ فعال' if sub['status'] == 'active' else '⏳ در انتظار'}\n"
+                
+                if sub['status'] == "active":
+                    remaining_days = max(0, (sub['end_date'] - current_time).days)
+                    response += f"⏳ زمان باقی‌مانده: {remaining_days} روز\n"
+                    response += f"📅 تاریخ شروع: {sub['start_date'].strftime('%Y-%m-%d %H:%M')}\n"
+                    response += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
+                
+                if sub['config']:
+                    response += f"🔐 کانفیگ:\n```\n{sub['config']}\n```\n"
+                
+                response += "------------------------\n\n"
+                
+            except Exception as e:
+                logging.error(f"Error processing subscription {sub['id']} for user_id {user_id}: {e}")
+                continue
+        
+        await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        
+    except Exception as e:
+        logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
+        await update.message.reply_text("⚠️ خطا در نمایش اشتراک‌ها. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+
+async def handle_agency_request(update, context, user_id):
+    """پردازش درخواست نمایندگی"""
+    is_agent = await is_user_agent(user_id)
+    if is_agent:
+        await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent=True))
+        return
+
+    agency_text = (
+        "🚀 اعطای نمایندگی رسمی تیز وی پی ان 🚀\n\n"
+        "اگر به دنبال یک فرصت درآمدزایی پایدار و بدون محدودیت هستید، حالا بهترین زمان برای پیوستن به تیم ماست!\n"
+        "ما به تعداد محدودی نماینده رسمی می‌پذیریم که بتوانند با فروش سرویس‌های پرسرعت و پایدار تیز وی پی ان، کسب‌وکار خودشان را راه‌اندازی کنند.\n\n"
+        "💰 شرایط دریافت نمایندگی:\n"
+        "برای شروع همکاری و فعال‌سازی پنل اختصاصی، کافیست ۱ میلیون تومان واریز کنید.\n"
+        "پس از واریز، شما به یک پنل کامل و شخصی دسترسی خواهید داشت که امکان ساخت و مدیریت اکانت‌ها را برایتان فراهم می‌کند.\n\n"
+        "📦 قیمت پلن‌ها برای نمایندگان:\n"
+        "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود | ۲ کاربره (٪۲۲ کاهش)\n"
+        "🥈۳ ماهه | ۲۱۰,۰۰۰ تومان | نامحدود | ۲ کاربره (٪۱۶ کاهش)\n"
+        "🥇۶ ماهه | ۳۸۰,۰۰۰ تومان | نامحدود | ۲ کاربره (٪۱۶ کاهش)\n\n"
+        "🔹 اکانت‌ها کاملاً نامحدود هستند (بدون محدودیت حجم یا سرعت)\n"
+        "🔹 شما تعیین‌کننده قیمت فروش به مشتری هستید\n"
+        "🔹 پشتیبانی کامل و ۲۴ ساعته\n\n"
+        "🔻 در صورت تایید موارد بالا روش پرداخت خود را انتخاب کنید"
+    )
+    await update.message.reply_text(agency_text, reply_markup=get_payment_method_keyboard())
+    user_states[user_id] = "awaiting_agency_payment_method"
+
+async def handle_agency_payment(update, context, user_id, text):
+    """پردازش پرداخت نمایندگی"""
+    amount = 1000000
+    description = "درخواست نمایندگی"
+    
+    if text == "🏦 کارت به کارت":
+        payment_id = await add_payment(user_id, amount, "agency_request", "card_to_card", description=description)
+        if payment_id:
+            await update.message.reply_text(
+                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
+                reply_markup=get_back_keyboard(),
+                parse_mode="MarkdownV2"
+            )
+            user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
+        else:
+            await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
+        return
+
+    if text == "💎 پرداخت با ترون":
+        payment_id = await add_payment(user_id, amount, "agency_request", "tron", description=description)
+        if payment_id:
+            await update.message.reply_text(
+                f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
+                reply_markup=get_back_keyboard(),
+                parse_mode="MarkdownV2"
+            )
+            user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
+        else:
+            await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
+        return
+
+    if text == "💰 پرداخت با موجودی":
+        balance = await get_balance(user_id)
+        if balance >= amount:
+            payment_id = await add_payment(user_id, amount, "agency_request", "balance", description=description)
+            if payment_id:
+                await deduct_balance(user_id, amount)
+                await update_payment_status(payment_id, "approved")
+                await set_user_agent(user_id)
+                await add_balance(user_id, amount)
+                await update.message.reply_text(
+                    "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.",
+                    reply_markup=get_main_keyboard()
+                )
+                await context.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود نمایندگی خریداری کرد."
+                )
+                user_states.pop(user_id, None)
+            else:
+                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+        else:
+            await update.message.reply_text(
+                f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
+                reply_markup=get_main_keyboard()
+            )
+            user_states.pop(user_id, None)
+        return
 
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
     await query.answer()
 
-    if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
-        if update.effective_user.id != ADMIN_ID:
-            await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
+    if update.effective_user.id != ADMIN_ID:
+        await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
+        return
+
+    if data.startswith("approve_"):
+        payment_id = int(data.split("_")[1])
+        payment = await db_execute("SELECT user_id, amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+        if not payment:
+            await query.message.reply_text("⚠️ پرداخت یافت نشد.")
             return
+        user_id, amount, ptype, description = payment
 
-        if data.startswith("approve_"):
-            payment_id = int(data.split("_")[1])
-            payment = await db_execute("SELECT user_id, amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            user_id, amount, ptype, description = payment
-
-            await update_payment_status(payment_id, "approved")
-            if ptype == "increase_balance":
-                await add_balance(user_id, amount)
-                await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
-                await query.message.edit_reply_markup(None)
-                await query.message.reply_text("✅ پرداخت تایید شد.")
-            elif ptype == "buy_subscription":
-                await context.bot.send_message(user_id, f"✅ پرداخت تایید شد. اشتراک شما (کد خرید: #{payment_id}) ارسال خواهد شد.")
-                config_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
-                ])
-                await query.message.edit_reply_markup(None)
-                await query.message.reply_text(f"✅ پرداخت برای اشتراک ({description}) تایید شد.", reply_markup=config_keyboard)
-            elif ptype == "agency_request":
-                await set_user_agent(user_id)
-                await add_balance(user_id, amount)  # Add the 1M to balance
-                await context.bot.send_message(user_id, "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.")
-                await query.message.edit_reply_markup(None)
-                await query.message.reply_text("✅ درخواست نمایندگی تایید شد.")
-
-        elif data.startswith("reject_"):
-            payment_id = int(data.split("_")[1])
-            payment = await db_execute("SELECT user_id, amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            user_id, amount, ptype = payment
-
-            await update_payment_status(payment_id, "rejected")
-            await context.bot.send_message(user_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
+        await update_payment_status(payment_id, "approved")
+        if ptype == "increase_balance":
+            await add_balance(user_id, amount)
+            await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
             await query.message.edit_reply_markup(None)
-            await query.message.reply_text("❌ پرداخت رد شد.")
+            await query.message.reply_text("✅ پرداخت تایید شد.")
+        elif ptype == "buy_subscription":
+            await context.bot.send_message(user_id, f"✅ پرداخت تایید شد. اشتراک شما (کد خرید: #{payment_id}) ارسال خواهد شد.")
+            config_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
+            ])
+            await query.message.edit_reply_markup(None)
+            await query.message.reply_text(f"✅ پرداخت برای اشتراک ({description}) تایید شد.", reply_markup=config_keyboard)
+        elif ptype == "agency_request":
+            await set_user_agent(user_id)
+            await add_balance(user_id, amount)
+            await context.bot.send_message(user_id, "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.")
+            await query.message.edit_reply_markup(None)
+            await query.message.reply_text("✅ درخواست نمایندگی تایید شد.")
 
-        elif data.startswith("send_config_"):
-            payment_id = int(data.split("_")[-1])
-            payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-            if not payment:
-                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
-                return
-            await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
-            user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
+    elif data.startswith("reject_"):
+        payment_id = int(data.split("_")[1])
+        payment = await db_execute("SELECT user_id, amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+        if not payment:
+            await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+            return
+        user_id, amount, ptype = payment
+
+        await update_payment_status(payment_id, "rejected")
+        await context.bot.send_message(user_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
+        await query.message.edit_reply_markup(None)
+        await query.message.reply_text("❌ پرداخت رد شد.")
+
+    elif data.startswith("send_config_"):
+        payment_id = int(data.split("_")[-1])
+        payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+        if not payment:
+            await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+            return
+        await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
+        user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
     
-    # هندلرهای کال‌بک برای user_info
-    elif data == "admin_balance_action" and update.effective_user.id == ADMIN_ID:
+    elif data == "admin_balance_action":
         await query.message.reply_text("🆔 ایدی عددی کاربر را وارد کنید:")
         user_states[ADMIN_ID] = "awaiting_admin_user_id_for_balance"
     
-    elif data == "admin_agent_action" and update.effective_user.id == ADMIN_ID:
+    elif data == "admin_agent_action":
         await query.message.reply_text("🆔 ایدی عددی کاربر را وارد کنید:")
         user_states[ADMIN_ID] = "awaiting_admin_user_id_for_agent"
 
