@@ -4,7 +4,7 @@ import asyncio
 import random
 import string
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, BackgroundTasks
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 )
@@ -25,13 +25,44 @@ WEBHOOK_URL = f"{RENDER_BASE_URL}{WEBHOOK_PATH}"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("bot.log", encoding="utf-8")
+    ]
 )
 
 app = FastAPI()
+
+# ---------- endpoint سلامت برای UptimeRobot ----------
 @app.get("/")
 async def health_check():
-    return {"status": "up", "message": "Bot is running!"}
+    return {"status": "up", "message": "Bot is running!", "timestamp": datetime.now().isoformat()}
+
+@app.get("/health")
+async def health():
+    try:
+        # بررسی اتصال به دیتابیس
+        await db_execute("SELECT 1", fetchone=True)
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "bot": "running",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "database": "disconnected",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.get("/ping")
+async def ping():
+    return {"pong": True, "timestamp": datetime.now().isoformat()}
+
+# ---------- مدیریت application ----------
 application = Application.builder().token(TOKEN).build()
 
 # ---------- PostgreSQL connection pool (psycopg2) ----------
@@ -104,7 +135,8 @@ CREATE TABLE IF NOT EXISTS users (
     invited_by BIGINT,
     phone TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_agent BOOLEAN DEFAULT FALSE
+    is_agent BOOLEAN DEFAULT FALSE,
+    is_new_user BOOLEAN DEFAULT TRUE
 )
 """
 CREATE_PAYMENTS_SQL = """
@@ -142,12 +174,24 @@ CREATE TABLE IF NOT EXISTS coupons (
 )
 """
 MIGRATE_SUBSCRIPTIONS_SQL = """
+DO $$
+BEGIN
+    -- اضافه کردن ستون is_new_user اگر وجود ندارد
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='is_new_user') THEN
+        ALTER TABLE users ADD COLUMN is_new_user BOOLEAN DEFAULT TRUE;
+    END IF;
+    
+    -- به‌روزرسانی کاربران موجود
+    UPDATE users SET is_new_user = FALSE WHERE is_new_user IS NULL;
+END $$;
+
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS start_date TIMESTAMP;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS duration_days INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_agent BOOLEAN DEFAULT FALSE;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_method TEXT;
+
 UPDATE subscriptions SET start_date = COALESCE(start_date, CURRENT_TIMESTAMP),
                         duration_days = CASE
                             WHEN plan = '🥉۱ ماهه | ۹۰ هزار تومان | نامحدود | ۲ کاربره' THEN 30
@@ -359,7 +403,7 @@ async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         users = await db_execute(
-            "SELECT user_id, username, phone, balance, is_agent, created_at FROM users ORDER BY created_at DESC",
+            "SELECT user_id, username, phone, balance, is_agent, created_at, is_new_user FROM users ORDER BY created_at DESC",
             fetch=True
         )
         if not users:
@@ -378,7 +422,7 @@ async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_part = response
 
         for user in users:
-            user_id, username, phone, balance, is_agent, created_at = user
+            user_id, username, phone, balance, is_agent, created_at, is_new_user = user
             
             # تعداد کاربرانی که توسط این کاربر دعوت شده‌اند
             invited_count = await db_execute(
@@ -388,6 +432,7 @@ async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             invited_count = invited_count[0] if invited_count else 0
             
             agent_status = "نماینده" if is_agent else "ساده"
+            user_status = "🆕 جدید" if is_new_user else "قدیمی"
             phone_display = phone if phone else "نامشخص"
             username_display = f"@{username}" if username else "بدون یوزرنیم"
             created_at_str = created_at.strftime("%Y-%m-%d %H:%M") if created_at else "نامشخص"
@@ -398,6 +443,7 @@ async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📞 شماره تلفن: {phone_display}\n"
                 f"💰 موجودی: {balance:,} تومان\n"
                 f"🆙 نوع اکانت: {agent_status}\n"
+                f"📊 وضعیت: {user_status}\n"
                 f"📅 تاریخ ایجاد: {created_at_str}\n"
                 f"👥 دعوت شدگان: {invited_count} نفر\n"
                 "--------------------\n\n"
@@ -434,6 +480,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         total_users = await db_execute("SELECT COUNT(*) FROM users", fetchone=True)
+        new_users = await db_execute("SELECT COUNT(*) FROM users WHERE is_new_user = TRUE", fetchone=True)
         active_users = await db_execute("SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active' AND config IS NOT NULL", fetchone=True)
         inactive_users = total_users[0] - active_users[0] if total_users and active_users else 0
         today_users = await db_execute(
@@ -502,9 +549,10 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stats_message = "🌟 گزارش عملکرد تیز VPN 🚀\n\n"
         stats_message += "👥 کاربران:\n"
         stats_message += f"  • کل کاربران: {total_users[0] if total_users else 0:,} نفر 🧑‍💻\n"
+        stats_message += f"  • کاربران جدید: {new_users[0] if new_users else 0:,} نفر 🆕\n"
         stats_message += f"  • کاربران فعال: {active_users[0] if active_users else 0:,} نفر ✅\n"
         stats_message += f"  • کاربران غیرفعال: {inactive_users:,} نفر ❎\n"
-        stats_message += f"  • کاربران جدید امروز: {today_users[0] if today_users else 0:,} نفر 🆕\n"
+        stats_message += f"  • کاربران جدید امروز: {today_users[0] if today_users else 0:,} نفر 📈\n"
         stats_message += f"  • کاربران دعوت‌شده: {invited_users[0] if invited_users else 0:,} نفر 🤝\n\n"
         
         stats_message += "💸 درآمد:\n"
@@ -687,19 +735,23 @@ async def mark_coupon_used(code):
     except Exception as e:
         logging.error(f"Error marking coupon {code} as used: {e}")
 
-# ---------- تابع ارسال اعلان کاربر جدید به ادمین ----------
-async def notify_admin_new_user(user_id, username, invited_by=None):
+# ---------- تابع اصلاح شده برای اطلاع‌رسانی کاربر جدید به ادمین ----------
+async def notify_admin_new_user(user_id, username, invited_by=None, is_new_user=True):
     """
-    ارسال پیام به ادمین هنگام ثبت‌نام کاربر جدید
+    ارسال پیام به ادمین هنگام ثبت‌نام کاربر جدید (تنها برای کاربران جدید)
     """
     try:
+        # فقط برای کاربران جدید اطلاع‌رسانی کن
+        if not is_new_user:
+            return
+            
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         username_display = f"@{username}" if username else "بدون یوزرنیم"
         invited_by_text = f"با دعوت کاربر {invited_by}" if invited_by and invited_by != user_id else "مستقیم"
         
         message = (
-            "👤 کاربر جدید به ربات اضافه شد:\n\n"
-            f"🆔 ایدی عددی: {user_id}\n"
+            "👤 کاربر **جدید** به ربات اضافه شد:\n\n"
+            f"🆔 ایدی عددی: `{user_id}`\n"
             f"📛 یوزرنیم: {username_display}\n"
             f"🕒 زمان ثبت‌نام: {current_time}\n"
             f"🎯 روش ورود: {invited_by_text}"
@@ -707,9 +759,10 @@ async def notify_admin_new_user(user_id, username, invited_by=None):
         
         await application.bot.send_message(
             chat_id=ADMIN_ID,
-            text=message
+            text=message,
+            parse_mode="Markdown"
         )
-        logging.info(f"Admin notified about new user: {user_id} (@{username})")
+        logging.info(f"Admin notified about NEW user: {user_id} (@{username})")
     except Exception as e:
         logging.error(f"Error notifying admin about new user {user_id}: {e}")
 
@@ -718,22 +771,28 @@ async def is_user_member(user_id):
     try:
         member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "administrator", "creator"]
-    except Exception:
+    except Exception as e:
+        logging.error(f"Error checking channel membership for user {user_id}: {e}")
         return False
 
 async def ensure_user(user_id, username, invited_by=None):
+    """
+    تابع اصلاح شده برای ثبت کاربر در دیتابیس
+    اکنون فقط برای کاربران واقعاً جدید اطلاع‌رسانی می‌کند
+    """
     try:
         # بررسی آیا کاربر قبلاً ثبت‌نام کرده است
-        row = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        row = await db_execute("SELECT user_id, is_new_user FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        
         if not row:
             # کاربر جدید - ثبت در دیتابیس
             await db_execute(
-                "INSERT INTO users (user_id, username, invited_by, is_agent) VALUES (%s, %s, %s, FALSE)",
+                "INSERT INTO users (user_id, username, invited_by, is_agent, is_new_user) VALUES (%s, %s, %s, FALSE, TRUE)",
                 (user_id, username, invited_by)
             )
             
-            # اطلاع به ادمین
-            await notify_admin_new_user(user_id, username, invited_by)
+            # اطلاع به ادمین (فقط برای کاربران جدید)
+            await notify_admin_new_user(user_id, username, invited_by, is_new_user=True)
             
             # اعتبار برای دعوت‌کننده
             if invited_by and invited_by != user_id:
@@ -741,7 +800,14 @@ async def ensure_user(user_id, username, invited_by=None):
                 if inviter:
                     await add_balance(invited_by, 10000)  # تغییر از 25000 به 10000
                     
-        logging.info(f"User {user_id} ensured in database")
+            logging.info(f"NEW user {user_id} registered in database")
+            
+        elif row[1]:  # کاربر وجود دارد و new_user است
+            # اگر کاربر قبلاً ثبت‌نام کرده اما هنوز new_user است
+            # فقط وضعیت را به قدیمی تغییر می‌دهیم
+            await db_execute("UPDATE users SET is_new_user = FALSE WHERE user_id = %s", (user_id,))
+            logging.info(f"Existing user {user_id} marked as non-new")
+            
     except Exception as e:
         logging.error(f"Error ensuring user {user_id}: {e}")
 
@@ -976,6 +1042,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     username = user.username or ""
 
+    # چک کردن عضویت در کانال
     if not await is_user_member(user_id):
         kb = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]]
         await update.message.reply_text(
@@ -2071,35 +2138,88 @@ application.add_handler(CallbackQueryHandler(admin_callback_handler))
 # ---------- webhook endpoint ----------
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.update_queue.put(update)
-    return {"ok": True}
+    try:
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+        await application.update_queue.put(update)
+        return {"ok": True}
+    except Exception as e:
+        logging.error(f"Error in webhook: {e}")
+        return {"ok": False, "error": str(e)}
 
 # ---------- lifecycle events ----------
 @app.on_event("startup")
 async def on_startup():
-    init_db_pool()
-    await create_tables()
+    """رویداد شروع برنامه"""
     try:
+        # راه‌اندازی connection pool
+        init_db_pool()
+        
+        # ساخت جداول دیتابیس
+        await create_tables()
+        
+        # شروع application
+        await application.initialize()
+        await application.start()
+        
+        # تنظیم وب‌هوک
         await application.bot.set_webhook(url=WEBHOOK_URL)
-        logging.info("Webhook set successfully")
+        logging.info(f"✅ Webhook set successfully: {WEBHOOK_URL}")
+        
+        # تنظیم دستورات بات
+        await set_bot_commands()
+        
+        # ارسال پیام شروع به ادمین
+        try:
+            await application.bot.send_message(
+                chat_id=ADMIN_ID,
+                text="🤖 ربات تیز VPN با موفقیت راه‌اندازی شد!\n"
+                     f"⏰ زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                     f"🌐 وب‌هوک: {RENDER_BASE_URL}"
+            )
+        except Exception as e:
+            logging.error(f"Error sending startup message to admin: {e}")
+        
+        logging.info("✅ Bot started successfully")
+        print("✅ Bot started successfully!")
+        
     except Exception as e:
-        logging.error(f"Error setting webhook: {e}")
-    await set_bot_commands()
-    await application.initialize()
-    await application.start()
-    print("✅ Webhook set:", WEBHOOK_URL)
+        logging.error(f"❌ Error during startup: {e}")
+        print(f"❌ Error during startup: {e}")
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    """رویداد خاموش شدن برنامه"""
     try:
+        # ارسال پیام خاموش شدن به ادمین
+        try:
+            await application.bot.send_message(
+                chat_id=ADMIN_ID,
+                text="⚠️ ربات تیز VPN در حال خاموش شدن...\n"
+                     f"⏰ زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+        except Exception as e:
+            logging.error(f"Error sending shutdown message to admin: {e}")
+        
+        # متوقف کردن application
         await application.stop()
         await application.shutdown()
-    finally:
+        
+        # بستن connection pool
         close_db_pool()
+        
+        logging.info("✅ Bot shut down successfully")
+        
+    except Exception as e:
+        logging.error(f"❌ Error during shutdown: {e}")
 
 # ---------- اجرای محلی (برای debug) ----------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=port,
+        log_level="info"
+    )
