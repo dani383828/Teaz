@@ -219,6 +219,18 @@ async def create_tables():
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
 
+# ---------- دستور جدید برای حذف کاربر ----------
+async def remove_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    حذف کامل کاربر از دیتابیس (فقط برای ادمین)
+    """
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    
+    await update.message.reply_text("🆔 ایدی عددی کاربری که می‌خواهید حذف کنید را وارد کنید:")
+    user_states[update.effective_user.id] = "awaiting_user_id_for_removal"
+
 # ---------- دستور جدید برای بکاپ گیری از دیتابیس ----------
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -367,6 +379,38 @@ async def send_notification_to_users(context, user_ids, notification_text):
     
     return sent_count, failed_count, failed_users
 
+# ---------- تابع برای اطلاع‌رسانی کاربر جدید به ادمین ----------
+async def notify_admin_new_user(user_id, username, invited_by=None):
+    """
+    ارسال پیام به ادمین هنگام ثبت‌نام کاربر جدید
+    """
+    try:
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        username_display = f"@{username}" if username else "بدون یوزرنیم"
+        invited_by_text = f"با دعوت کاربر {invited_by}" if invited_by and invited_by != user_id else "مستقیم"
+        
+        # گرفتن تعداد کل کاربران
+        total_users = await db_execute("SELECT COUNT(*) FROM users", fetchone=True)
+        total_users_count = total_users[0] if total_users else 0
+        
+        message = (
+            "🆕 **کاربر جدید به ربات اضافه شد!**\n\n"
+            f"🆔 ایدی عددی: `{user_id}`\n"
+            f"📛 یوزرنیم: {username_display}\n"
+            f"🕒 زمان عضویت: {current_time}\n"
+            f"🎯 روش ورود: {invited_by_text}\n"
+            f"📊 تعداد کل کاربران: {total_users_count} نفر"
+        )
+        
+        await application.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=message,
+            parse_mode="Markdown"
+        )
+        logging.info(f"Admin notified about new user: {user_id} (@{username})")
+    except Exception as e:
+        logging.error(f"Error notifying admin about new user {user_id}: {e}")
+
 # ---------- دستور جدید برای اطلاع رسانی ----------
 async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -413,7 +457,8 @@ async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # کیبورد اینلاین برای گزینه‌ها
         inline_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("💰 افزایش/کاهش موجودی", callback_data="admin_balance_action")],
-            [InlineKeyboardButton("🧑‍💼 تغییر نوع اکانت", callback_data="admin_agent_action")]
+            [InlineKeyboardButton("🧑‍💼 تغییر نوع اکانت", callback_data="admin_agent_action")],
+            [InlineKeyboardButton("🗑️ حذف کاربر", callback_data="admin_remove_user_action")]
         ])
 
         response = "👥 لیست کامل اطلاعات کاربران:\n\n"
@@ -735,36 +780,29 @@ async def mark_coupon_used(code):
     except Exception as e:
         logging.error(f"Error marking coupon {code} as used: {e}")
 
-# ---------- تابع اصلاح شده برای اطلاع‌رسانی کاربر جدید به ادمین ----------
-async def notify_admin_new_user(user_id, username, invited_by=None, is_new_user=True):
+# ---------- تابع برای حذف کامل کاربر از دیتابیس ----------
+async def remove_user_from_db(user_id):
     """
-    ارسال پیام به ادمین هنگام ثبت‌نام کاربر جدید (تنها برای کاربران جدید)
+    حذف کامل کاربر از تمام جداول دیتابیس
     """
     try:
-        # فقط برای کاربران جدید اطلاع‌رسانی کن
-        if not is_new_user:
-            return
-            
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        username_display = f"@{username}" if username else "بدون یوزرنیم"
-        invited_by_text = f"با دعوت کاربر {invited_by}" if invited_by and invited_by != user_id else "مستقیم"
+        # حذف از کوپن‌ها
+        await db_execute("DELETE FROM coupons WHERE user_id = %s", (user_id,))
         
-        message = (
-            "👤 کاربر **جدید** به ربات اضافه شد:\n\n"
-            f"🆔 ایدی عددی: `{user_id}`\n"
-            f"📛 یوزرنیم: {username_display}\n"
-            f"🕒 زمان ثبت‌نام: {current_time}\n"
-            f"🎯 روش ورود: {invited_by_text}"
-        )
+        # حذف از اشتراک‌ها
+        await db_execute("DELETE FROM subscriptions WHERE user_id = %s", (user_id,))
         
-        await application.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=message,
-            parse_mode="Markdown"
-        )
-        logging.info(f"Admin notified about NEW user: {user_id} (@{username})")
+        # حذف از پرداخت‌ها
+        await db_execute("DELETE FROM payments WHERE user_id = %s", (user_id,))
+        
+        # حذف از کاربران
+        await db_execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+        
+        logging.info(f"User {user_id} completely removed from database")
+        return True
     except Exception as e:
-        logging.error(f"Error notifying admin about new user {user_id}: {e}")
+        logging.error(f"Error removing user {user_id} from database: {e}")
+        return False
 
 # ---------- توابع DB موجود ----------
 async def is_user_member(user_id):
@@ -777,12 +815,11 @@ async def is_user_member(user_id):
 
 async def ensure_user(user_id, username, invited_by=None):
     """
-    تابع اصلاح شده برای ثبت کاربر در دیتابیس
-    اکنون فقط برای کاربران واقعاً جدید اطلاع‌رسانی می‌کند
+    تابع اصلاح شده برای ثبت کاربر در دیتابیس با اطلاع‌رسانی به ادمین
     """
     try:
         # بررسی آیا کاربر قبلاً ثبت‌نام کرده است
-        row = await db_execute("SELECT user_id, is_new_user FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        row = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,), fetchone=True)
         
         if not row:
             # کاربر جدید - ثبت در دیتابیس
@@ -791,8 +828,8 @@ async def ensure_user(user_id, username, invited_by=None):
                 (user_id, username, invited_by)
             )
             
-            # اطلاع به ادمین (فقط برای کاربران جدید)
-            await notify_admin_new_user(user_id, username, invited_by, is_new_user=True)
+            # اطلاع به ادمین (برای کاربران جدید)
+            await notify_admin_new_user(user_id, username, invited_by)
             
             # اعتبار برای دعوت‌کننده
             if invited_by and invited_by != user_id:
@@ -802,9 +839,8 @@ async def ensure_user(user_id, username, invited_by=None):
                     
             logging.info(f"NEW user {user_id} registered in database")
             
-        elif row[1]:  # کاربر وجود دارد و new_user است
-            # اگر کاربر قبلاً ثبت‌نام کرده اما هنوز new_user است
-            # فقط وضعیت را به قدیمی تغییر می‌دهیم
+        elif row:  # کاربر وجود دارد
+            # فقط برای کاربران موجود، برچسب new_user را غیرفعال کن
             await db_execute("UPDATE users SET is_new_user = FALSE WHERE user_id = %s", (user_id,))
             logging.info(f"Existing user {user_id} marked as non-new")
             
@@ -1029,7 +1065,8 @@ async def set_bot_commands():
             BotCommand(command="/coupon", description="ایجاد کد تخفیف (ادمین)"),
             BotCommand(command="/notification", description="ارسال اطلاعیه به کاربران (ادمین)"),
             BotCommand(command="/backup", description="تهیه بکاپ از دیتابیس (ادمین)"),
-            BotCommand(command="/restore", description="بازیابی دیتابیس از بکاپ (ادمین)")
+            BotCommand(command="/restore", description="بازیابی دیتابیس از بکاپ (ادمین)"),
+            BotCommand(command="/remove_user", description="حذف کاربر از دیتابیس (ادمین)")
         ]
         await application.bot.set_my_commands(public_commands)
         await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
@@ -1071,6 +1108,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in ["بازگشت به منو", "⬅️ بازگشت به منو"]:
         await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
+        return
+
+    # هندلر جدید برای حذف کاربر
+    if user_states.get(user_id) == "awaiting_user_id_for_removal":
+        await handle_remove_user(update, context, user_id, text)
         return
 
     # هندلر جدید برای دریافت فایل بکاپ
@@ -1209,6 +1251,41 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # اگر کاربر در هیچ وضعیت خاصی نباشد، دستورات معمولی را پردازش کن
     await handle_normal_commands(update, context, user_id, text)
+
+async def handle_remove_user(update, context, user_id, text):
+    """پردازش حذف کاربر"""
+    try:
+        target_user_id = int(text)
+        
+        # بررسی اینکه کاربر وجود دارد یا نه
+        user_exists = await db_execute("SELECT user_id, username FROM users WHERE user_id = %s", (target_user_id,), fetchone=True)
+        if not user_exists:
+            await update.message.reply_text("⚠️ کاربری با این ایدی یافت نشد.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
+            return
+        
+        # تایید از ادمین
+        username = user_exists[1] or "بدون یوزرنیم"
+        
+        # ایجاد کیبورد تایید
+        keyboard = ReplyKeyboardMarkup([
+            [KeyboardButton(f"✅ بله، کاربر {target_user_id} را حذف کن")],
+            [KeyboardButton("❌ خیر، انصراف")]
+        ], resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"⚠️ آیا مطمئن هستید که می‌خواهید کاربر زیر را حذف کنید؟\n\n"
+            f"🆔 ایدی عددی: {target_user_id}\n"
+            f"📛 یوزرنیم: @{username}\n\n"
+            "این عمل تمام اطلاعات کاربر از جمله اشتراک‌ها، پرداخت‌ها و موجودی را حذف می‌کند و قابل بازگشت نیست!",
+            reply_markup=keyboard
+        )
+        
+        context.user_data["pending_removal_user_id"] = target_user_id
+        user_states[user_id] = "confirm_user_removal"
+        
+    except ValueError:
+        await update.message.reply_text("⚠️ لطفا یک ایدی عددی معتبر وارد کنید.", reply_markup=get_back_keyboard())
 
 async def process_payment_receipt(update, context, user_id, payment_id, receipt_type):
     """پردازش فیش پرداخت"""
@@ -1824,6 +1901,37 @@ async def handle_normal_commands(update, context, user_id, text):
         await handle_agency_payment(update, context, user_id, text)
         return
 
+    # پردازش تایید حذف کاربر
+    if user_states.get(user_id) == "confirm_user_removal":
+        if text.startswith("✅ بله، کاربر"):
+            target_user_id = context.user_data.get("pending_removal_user_id")
+            if not target_user_id:
+                await update.message.reply_text("⚠️ خطا در دریافت اطلاعات کاربر.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+                return
+            
+            # حذف کاربر از دیتابیس
+            success = await remove_user_from_db(target_user_id)
+            if success:
+                await update.message.reply_text(
+                    f"✅ کاربر با ایدی {target_user_id} به طور کامل از دیتابیس حذف شد.",
+                    reply_markup=get_main_keyboard()
+                )
+            else:
+                await update.message.reply_text(
+                    f"⚠️ خطا در حذف کاربر {target_user_id} از دیتابیس.",
+                    reply_markup=get_main_keyboard()
+                )
+            
+            if "pending_removal_user_id" in context.user_data:
+                del context.user_data["pending_removal_user_id"]
+                
+        elif text == "❌ خیر، انصراف":
+            await update.message.reply_text("❌ عملیات حذف کاربر لغو شد.", reply_markup=get_main_keyboard())
+            
+        user_states.pop(user_id, None)
+        return
+
     await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
     user_states.pop(user_id, None)
 
@@ -2110,6 +2218,10 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == "admin_agent_action":
         await query.message.reply_text("🆔 ایدی عددی کاربر را وارد کنید:")
         user_states[ADMIN_ID] = "awaiting_admin_user_id_for_agent"
+    
+    elif data == "admin_remove_user_action":
+        await query.message.reply_text("🆔 ایدی عددی کاربری که می‌خواهید حذف کنید را وارد کنید:")
+        user_states[ADMIN_ID] = "awaiting_user_id_for_removal"
 
 async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
@@ -2132,6 +2244,7 @@ application.add_handler(CommandHandler("coupon", coupon_command))
 application.add_handler(CommandHandler("notification", notification_command))
 application.add_handler(CommandHandler("backup", backup_command))
 application.add_handler(CommandHandler("restore", restore_command))
+application.add_handler(CommandHandler("remove_user", remove_user_command))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
 
@@ -2175,7 +2288,10 @@ async def on_startup():
                 chat_id=ADMIN_ID,
                 text="🤖 ربات تیز VPN با موفقیت راه‌اندازی شد!\n"
                      f"⏰ زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                     f"🌐 وب‌هوک: {RENDER_BASE_URL}"
+                     f"🌐 وب‌هوک: {RENDER_BASE_URL}\n\n"
+                     "🆕 قابلیت‌های جدید:\n"
+                     "1️⃣ دستور `/remove_user` برای حذف کاربران\n"
+                     "2️⃣ اطلاع‌رسانی خودکار کاربران جدید به ادمین"
             )
         except Exception as e:
             logging.error(f"Error sending startup message to admin: {e}")
