@@ -1,3 +1,4 @@
+cat > wrangler.toml << 'EOF'
 name = "teaz-vpn-bot"
 compatibility_date = "2026-01-02"
 main = "main.js"
@@ -10,11 +11,4 @@ ADMIN_ID = "5542927340"
 TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
 BANK_CARD = "6037 9975 9717 2684"
 BOT_USERNAME = "teazvpn_bot"
-
-[env.production]
-name = "teaz-vpn-bot-prod"
-workers_dev = false
-route = "teaz-vpn-bot.your-domain.workers.dev"
-
-[env.staging]
-name = "teaz-vpn-bot-staging"
+EOF
