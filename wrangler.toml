@@ -4,7 +4,7 @@ main = "main.js"
 workers_dev = true
 
 [vars]
-BOT_TOKEN = "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jNg"
+BOT_TOKEN = "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
 CHANNEL_USERNAME = "@teazvpn"
 ADMIN_ID = "5542927340"
 TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
