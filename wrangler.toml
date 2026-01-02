@@ -1,4 +1,18 @@
-name = "neon-worker"
+name = "teaz-vpn-bot"
 compatibility_date = "2026-01-02"
-
 main = "index.js"
+workers_dev = true
+
+[vars]
+BOT_TOKEN = "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
+CHANNEL_USERNAME = "@teazvpn"
+ADMIN_ID = "5542927340"
+TRON_ADDRESS = "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb"
+BANK_CARD = "6037 9975 9717 2684"
+DATABASE_URL = "postgresql://username:password@host:port/database"
+
+[env.production]
+name = "teaz-vpn-bot-prod"
+
+[env.staging]
+name = "teaz-vpn-bot-staging"
