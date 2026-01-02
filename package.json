@@ -9,9 +9,7 @@
     "deploy": "wrangler deploy",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "dependencies": {
-    "telegraf": "^4.15.3"
-  },
+  "dependencies": {},
   "devDependencies": {
     "wrangler": "^4.54.0"
   },
