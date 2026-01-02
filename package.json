@@ -1,28 +1,29 @@
 {
   "name": "teaz-vpn-bot",
   "version": "1.0.0",
-  "description": "Telegram VPN Bot",
-  "main": "index.js",
+  "description": "Telegram VPN Bot for Cloudflare Workers",
+  "main": "main.js",
+  "type": "module",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js",
+    "start": "wrangler dev",
+    "deploy": "wrangler deploy",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.61.0",
-    "pg": "^8.11.0",
-    "express": "^4.18.2"
+    "telegraf": "^4.15.3"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "wrangler": "^4.54.0"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   },
   "keywords": [
     "telegram",
     "bot",
-    "vpn"
+    "vpn",
+    "cloudflare",
+    "worker"
   ],
   "author": "Teaz VPN",
   "license": "MIT"
