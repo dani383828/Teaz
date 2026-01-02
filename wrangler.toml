@@ -1,4 +1,4 @@
-name = "neon-worker"
+name = "Node-worker"
 compatibility_date = "2026-01-02"
 
-main = "Neon.js/main.js"   # مسیر فایل اصلی تو پروژه
+main = "Node.js/main.js"   # مسیر فایل اصلی تو پروژه
