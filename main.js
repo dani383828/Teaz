@@ -1,39 +1,42 @@
-// Cloudflare Worker bindings
+// main.js – Cloudflare Worker style
+
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const CHANNEL = CHANNEL_USERNAME;
-const ADMIN = parseInt(ADMIN_ID);
-const TRON = TRON_ADDRESS;
-const CARD = BANK_CARD;
+const CHANNEL_USERNAME = CHANNEL_USERNAME || "@teazvpn";
+const ADMIN_ID = parseInt(ADMIN_ID || "5542927340");
+const TRON_ADDRESS = TRON_ADDRESS || "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb";
+const BANK_CARD = BANK_CARD || "6037 9975 9717 2684";
 
-// Event listener برای Worker
-addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request))
-})
+addEventListener("fetch", event => {
+  event.respondWith(handleRequest(event.request));
+});
 
-async function handleRequest(request) {
-  const url = new URL(request.url);
-  
-  // اگر وبهوک تلگرام اینجا بخواد کار کنه
-  if (url.pathname === "/webhook" && request.method === "POST") {
-    const body = await request.json();
-    // نمونه پاسخ: فقط نام کاربری بات و ادمین
-    console.log("Update received:", body);
-
-    // می‌تونی اینجا پیام به کانال یا ادمین بفرستی
-    await fetch(`${TELEGRAM_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: ADMIN,
-        text: `New update received:\n${JSON.stringify(body)}`,
-      }),
+async function handleRequest(req) {
+  // نمونه ساده پاسخ
+  if (req.method === "GET") {
+    return new Response(`Bot is running! Channel: ${CHANNEL_USERNAME}`, {
+      headers: { "Content-Type": "text/plain" },
     });
-
-    return new Response("OK", { status: 200 });
   }
 
-  // پاسخ پیشفرض
-  return new Response(`Bot username: ${BOT_USERNAME}, Admin: ${ADMIN}`, {
-    headers: { 'Content-Type': 'text/plain' },
-  });
+  // POST برای دریافت پیام‌ها از تلگرام (webhook)
+  if (req.method === "POST") {
+    const body = await req.json();
+    console.log("Incoming update:", body);
+
+    // نمونه: ارسال پیام پاسخ ساده به تلگرام
+    if (body.message && body.message.text) {
+      const chatId = body.message.chat.id;
+      const text = `پیام شما دریافت شد: ${body.message.text}`;
+
+      await fetch(`${TELEGRAM_API}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text }),
+      });
+    }
+
+    return new Response("ok");
+  }
+
+  return new Response("Method not allowed", { status: 405 });
 }
