@@ -1,29 +1,25 @@
-// main.js – Cloudflare Worker style
+// main.js
 
+// مستقیم از binding wrangler.toml
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const CHANNEL_USERNAME = CHANNEL_USERNAME || "@teazvpn";
-const ADMIN_ID = parseInt(ADMIN_ID || "5542927340");
-const TRON_ADDRESS = TRON_ADDRESS || "TJ4xrwKzKjk6FgKfuuqwah3Az5Ur22kJb";
-const BANK_CARD = BANK_CARD || "6037 9975 9717 2684";
+const CHANNEL = CHANNEL_USERNAME;
+const ADMIN = parseInt(ADMIN_ID);
+const TRON = TRON_ADDRESS;
+const CARD = BANK_CARD;
 
 addEventListener("fetch", event => {
   event.respondWith(handleRequest(event.request));
 });
 
 async function handleRequest(req) {
-  // نمونه ساده پاسخ
   if (req.method === "GET") {
-    return new Response(`Bot is running! Channel: ${CHANNEL_USERNAME}`, {
-      headers: { "Content-Type": "text/plain" },
-    });
+    return new Response(`Bot is running on ${CHANNEL}`, { headers: { "Content-Type": "text/plain" } });
   }
 
-  // POST برای دریافت پیام‌ها از تلگرام (webhook)
   if (req.method === "POST") {
     const body = await req.json();
     console.log("Incoming update:", body);
 
-    // نمونه: ارسال پیام پاسخ ساده به تلگرام
     if (body.message && body.message.text) {
       const chatId = body.message.chat.id;
       const text = `پیام شما دریافت شد: ${body.message.text}`;
