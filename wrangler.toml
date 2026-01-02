@@ -1,4 +1,4 @@
-name = "Node-worker"
+name = "node-worker"
 compatibility_date = "2026-01-02"
 
-main = "Node.js/main.js"   # مسیر فایل اصلی تو پروژه
+main = "node.js/main.js"   # مسیر فایل اصلی تو پروژه
